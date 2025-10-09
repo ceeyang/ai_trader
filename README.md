@@ -203,9 +203,9 @@ MIT License
 
 ## 联系方式
 
-- 项目主页: https://github.com/ai-trader/ai-trader
-- 问题反馈: https://github.com/ai-trader/ai-trader/issues
-- 邮箱: team@aitrader.com
+- 项目主页: <https://github.com/ai-trader/ai-trader>
+- 问题反馈: <https://github.com/ai-trader/ai-trader/issues>
+- 邮箱: <team@aitrader.com>
 
 ## 更新日志
 

@@ -1,17 +1,14 @@
 """
 主窗口GUI
 
-重构后的主窗口，使用新的模块化架构。
+重构后的主窗口，使用模块化架构，支持多页面切换。
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
-import threading
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from tkinter import ttk
+from typing import Optional, Dict
 
-from ..strategies.dca.dca_strategy import DCAStrategy
-from ..core.data.providers import BinanceDataSource
+from .pages import DCAPage
 
 
 class MainWindow:
@@ -26,21 +23,22 @@ class MainWindow:
         """
         self.root = root
         self.root.title("AI数字货币量化交易系统")
-        self.root.geometry("1000x800")
+        self.root.geometry("1200x800")
         self.root.resizable(True, True)
         
         # 设置样式
         self.setup_styles()
         
         # 初始化变量
-        self.symbols_list: List[str] = []
-        self.data_source: Optional[BinanceDataSource] = None
+        self.current_page: Optional[ttk.Frame] = None
+        self.pages: Dict[str, ttk.Frame] = {}
+        self.current_page_name: Optional[str] = None
         
         # 创建GUI组件
         self.create_widgets()
         
-        # 加载币种列表
-        self.load_symbols()
+        # 加载默认页面
+        self.load_default_page()
     
     def setup_styles(self) -> None:
         """设置GUI样式"""
@@ -51,242 +49,202 @@ class MainWindow:
         style.configure('Title.TLabel', font=('Arial', 16, 'bold'))
         style.configure('Header.TLabel', font=('Arial', 12, 'bold'))
         style.configure('Info.TLabel', font=('Arial', 10))
+        
+        # 导航栏样式
+        style.configure('Navbar.TFrame', relief='flat', borderwidth=1)
+        style.configure('NavbarTitle.TLabel', font=('Arial', 16, 'bold'))
+        style.configure('Navbar.TButton', font=('Arial', 10), padding=(10, 5))
+        
+        # 内容区域样式
+        style.configure('Content.TFrame', relief='flat')
     
     def create_widgets(self) -> None:
         """创建GUI组件"""
         # 主框架
-        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame = ttk.Frame(self.root)
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # 配置网格权重
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        
-        # 标题
-        title_label = ttk.Label(main_frame, text="AI数字货币量化交易系统", style='Title.TLabel')
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
-        
-        # 创建选项卡
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
-        
-        # 定投计算选项卡
-        self.create_dca_tab()
-        
-        # 策略管理选项卡
-        self.create_strategy_tab()
-        
-        # 监控面板选项卡
-        self.create_monitoring_tab()
-        
-        # 配置网格权重
+        main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(1, weight=1)
+        
+        # 创建顶部导航栏
+        self.create_top_navbar(main_frame)
+        
+        # 创建内容区域
+        self.create_content_area(main_frame)
     
-    def create_dca_tab(self) -> None:
-        """创建定投计算选项卡"""
-        dca_frame = ttk.Frame(self.notebook, padding="10")
-        self.notebook.add(dca_frame, text="定投计算")
+    def create_top_navbar(self, parent: ttk.Frame) -> None:
+        """创建顶部导航栏"""
+        # 顶部导航栏容器
+        navbar = ttk.Frame(parent, style='Navbar.TFrame')
+        navbar.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=0, pady=0)
         
-        # 配置网格
-        dca_frame.columnconfigure(1, weight=1)
+        # 左侧标题区域
+        title_frame = ttk.Frame(navbar)
+        title_frame.pack(side=tk.LEFT, padx=20, pady=10)
         
-        # 币种选择
-        ttk.Label(dca_frame, text="选择币种:", style='Header.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.symbol_var = tk.StringVar(value="SOLUSDT")
-        self.symbol_combo = ttk.Combobox(dca_frame, textvariable=self.symbol_var, width=20, state="readonly")
-        self.symbol_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        # 应用标题
+        title_label = ttk.Label(title_frame, text="AI数字货币量化交易系统", 
+                               style='NavbarTitle.TLabel')
+        title_label.pack(side=tk.LEFT)
         
-        # 开始日期选择
-        ttk.Label(dca_frame, text="开始日期:", style='Header.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5)
-        self.start_date_var = tk.StringVar(value="2024-01-01")
-        self.start_date_entry = ttk.Entry(dca_frame, textvariable=self.start_date_var, width=20)
-        self.start_date_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        # 右侧导航按钮区域
+        nav_frame = ttk.Frame(navbar)
+        nav_frame.pack(side=tk.RIGHT, padx=20, pady=10)
         
-        # 结束日期选择
-        ttk.Label(dca_frame, text="结束日期:", style='Header.TLabel').grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.end_date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
-        self.end_date_entry = ttk.Entry(dca_frame, textvariable=self.end_date_var, width=20)
-        self.end_date_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        # 导航按钮列表
+        nav_buttons = [
+            ("定投计算", "dca"),
+            ("策略管理", "strategy"),
+            ("回测分析", "backtest"),
+            ("监控面板", "monitoring"),
+            ("设置", "settings")
+        ]
         
-        # 定投日期选择
-        ttk.Label(dca_frame, text="定投日期:", style='Header.TLabel').grid(row=3, column=0, sticky=tk.W, pady=5)
-        self.invest_day_var = tk.StringVar(value="10")
-        self.invest_day_combo = ttk.Combobox(dca_frame, textvariable=self.invest_day_var, 
-                                           values=[str(i) for i in range(1, 32)], width=20, state="readonly")
-        self.invest_day_combo.grid(row=3, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
-        
-        # 定投金额
-        ttk.Label(dca_frame, text="定投金额 (USDT):", style='Header.TLabel').grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.invest_amount_var = tk.StringVar(value="200")
-        self.invest_amount_entry = ttk.Entry(dca_frame, textvariable=self.invest_amount_var, width=20)
-        self.invest_amount_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
-        
-        # 按钮框架
-        button_frame = ttk.Frame(dca_frame)
-        button_frame.grid(row=5, column=0, columnspan=2, pady=20)
-        
-        # 计算按钮
-        self.calculate_btn = ttk.Button(button_frame, text="计算收益", command=self.calculate_dca_profit)
-        self.calculate_btn.pack(side=tk.LEFT, padx=5)
-        
-        # 清空按钮
-        self.clear_btn = ttk.Button(button_frame, text="清空结果", command=self.clear_results)
-        self.clear_btn.pack(side=tk.LEFT, padx=5)
-        
-        # 结果显示区域
-        ttk.Label(dca_frame, text="计算结果:", style='Header.TLabel').grid(row=6, column=0, sticky=tk.W, pady=(20, 5))
-        
-        # 创建结果显示的文本框
-        self.result_text = scrolledtext.ScrolledText(dca_frame, height=15, width=80, wrap=tk.WORD)
-        self.result_text.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-        
-        # 配置网格权重
-        dca_frame.rowconfigure(7, weight=1)
+        # 创建导航按钮
+        self.nav_buttons = {}
+        for i, (text, page_name) in enumerate(nav_buttons):
+            btn = ttk.Button(nav_frame, text=text, 
+                           command=lambda p=page_name: self.show_page(p),
+                           style='Navbar.TButton')
+            btn.pack(side=tk.LEFT, padx=5)
+            self.nav_buttons[page_name] = btn
     
-    def create_strategy_tab(self) -> None:
-        """创建策略管理选项卡"""
-        strategy_frame = ttk.Frame(self.notebook, padding="10")
-        self.notebook.add(strategy_frame, text="策略管理")
+    
+    def create_content_area(self, parent: ttk.Frame) -> None:
+        """创建内容区域"""
+        # 内容区域
+        self.content_frame = ttk.Frame(parent, style='Content.TFrame')
+        self.content_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=0, pady=0)
         
-        ttk.Label(strategy_frame, text="策略管理功能开发中...", style='Info.TLabel').pack(pady=50)
+        # 配置内容区域自适应
+        self.content_frame.columnconfigure(0, weight=1)
+        self.content_frame.rowconfigure(0, weight=1)
     
-    def create_monitoring_tab(self) -> None:
-        """创建监控面板选项卡"""
-        monitoring_frame = ttk.Frame(self.notebook, padding="10")
-        self.notebook.add(monitoring_frame, text="监控面板")
+    def load_default_page(self) -> None:
+        """加载默认页面"""
+        self.show_page("dca")
+    
+    def show_page(self, page_name: str) -> None:
+        """显示指定页面"""
+        # 性能优化：如果当前页面就是目标页面，直接返回
+        if self.current_page_name == page_name:
+            return
         
-        ttk.Label(monitoring_frame, text="监控面板功能开发中...", style='Info.TLabel').pack(pady=50)
-    
-    def load_symbols(self) -> None:
-        """加载币种列表"""
-        def load_symbols_thread():
-            try:
-                self.data_source = BinanceDataSource()
-                if self.data_source.connect():
-                    symbols = self.data_source.get_available_symbols()
-                    if symbols:
-                        self.symbols_list = symbols
-                        self.root.after(0, self.update_symbol_combo)
-                    else:
-                        # 使用默认币种列表
-                        self.symbols_list = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT"]
-                        self.root.after(0, self.update_symbol_combo)
-                else:
-                    self.symbols_list = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT"]
-                    self.root.after(0, self.update_symbol_combo)
-                    
-            except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("错误", f"加载币种列表失败: {str(e)}"))
+        # 隐藏当前页面
+        if self.current_page:
+            self.current_page.grid_remove()
         
-        # 在后台线程中加载币种
-        threading.Thread(target=load_symbols_thread, daemon=True).start()
+        # 如果页面已存在，直接显示
+        if page_name in self.pages:
+            self.current_page = self.pages[page_name]
+            self.current_page.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            self.current_page_name = page_name
+            return
+        
+        # 创建新页面
+        if page_name == "dca":
+            self.create_dca_page()
+        elif page_name == "strategy":
+            self.create_strategy_page()
+        elif page_name == "backtest":
+            self.create_backtest_page()
+        elif page_name == "monitoring":
+            self.create_monitoring_page()
+        elif page_name == "settings":
+            self.create_settings_page()
+        else:
+            self.create_placeholder_page(page_name)
+        
+        # 更新当前页面名称
+        self.current_page_name = page_name
     
-    def update_symbol_combo(self) -> None:
-        """更新币种下拉框"""
-        self.symbol_combo['values'] = self.symbols_list
+    def get_current_page_name(self) -> Optional[str]:
+        """获取当前页面名称"""
+        return self.current_page_name
     
-    def calculate_dca_profit(self) -> None:
-        """计算定投收益"""
-        try:
-            # 获取输入参数
-            symbol = self.symbol_var.get().strip()
-            start_date_str = self.start_date_var.get().strip()
-            end_date_str = self.end_date_var.get().strip()
-            invest_day = int(self.invest_day_var.get())
-            invest_amount = float(self.invest_amount_var.get())
-            
-            # 验证输入
-            if not symbol or not start_date_str or not end_date_str:
-                messagebox.showerror("错误", "请填写所有必填字段")
-                return
-            
-            if invest_amount <= 0:
-                messagebox.showerror("错误", "定投金额必须大于0")
-                return
-            
-            # 解析日期
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
-            
-            # 显示计算中状态
-            self.result_text.delete(1.0, tk.END)
-            self.result_text.insert(tk.END, "正在计算，请稍候...\n")
-            self.calculate_btn.config(state="disabled")
-            
-            # 在后台线程中执行计算
-            threading.Thread(target=self.calculate_dca_profit_thread, 
-                           args=(symbol, start_date, end_date, invest_day, invest_amount), 
-                           daemon=True).start()
-            
-        except ValueError as e:
-            messagebox.showerror("错误", f"输入格式错误: {str(e)}")
-        except Exception as e:
-            messagebox.showerror("错误", f"计算失败: {str(e)}")
+    def create_dca_page(self) -> None:
+        """创建定投计算页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 配置页面自适应
+        page_frame.columnconfigure(0, weight=1)
+        page_frame.rowconfigure(0, weight=1)
+        
+        # 创建定投页面实例
+        dca_page = DCAPage(page_frame)
+        self.pages["dca"] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = "dca"
     
-    def calculate_dca_profit_thread(self, symbol: str, start_date: datetime, end_date: datetime, 
-                                  invest_day: int, invest_amount: float) -> None:
-        """在后台线程中计算定投收益"""
-        try:
-            # 创建定投策略
-            dca_strategy = DCAStrategy(
-                symbol=symbol,
-                invest_amount=invest_amount,
-                invest_day=invest_day,
-                start_date=start_date,
-                end_date=end_date
-            )
-            
-            # 执行定投计算
-            result = dca_strategy.execute_dca()
-            
-            # 格式化结果
-            result_lines = []
-            result_lines.append(f"币种: {result['symbol']}")
-            result_lines.append(f"定投日期: 每月{invest_day}号")
-            result_lines.append(f"定投金额: {invest_amount} USDT")
-            result_lines.append(f"时间范围: {start_date.strftime('%Y-%m-%d')} 至 {end_date.strftime('%Y-%m-%d')}")
-            result_lines.append(f"投资次数: {result['investment_count']}")
-            result_lines.append("-" * 50)
-            result_lines.append("定投详情:")
-            
-            for record in result['records']:
-                result_lines.append(f"{record['date']}: 价格={record['price']:.2f} USDT, "
-                                  f"买入={record['coins']:.6f} {symbol}")
-            
-            result_lines.append("\n" + "=" * 50)
-            result_lines.append("收益汇总:")
-            result_lines.append(f"当前价格: {result['current_price']:.2f} USDT")
-            result_lines.append(f"总投入: {result['total_invested']:.2f} USDT")
-            result_lines.append(f"当前总价值: {result['total_value']:.2f} USDT")
-            result_lines.append(f"收益: {result['profit']:.2f} USDT")
-            result_lines.append(f"收益率: {result['profit_rate']:.2f}%")
-            result_lines.append(f"累计买入: {result['total_coins']:.6f} {symbol}")
-            result_lines.append(f"平均成本: {result['average_cost']:.2f} USDT")
-            result_lines.append("=" * 50)
-            
-            # 更新UI
-            self.root.after(0, lambda: self.show_results(result_lines))
-            
-        except Exception as e:
-            self.root.after(0, lambda: self.show_error(f"计算失败: {str(e)}"))
+    def create_strategy_page(self) -> None:
+        """创建策略管理页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 占位内容
+        ttk.Label(page_frame, text="策略管理功能开发中...", 
+                 style='Header.TLabel').pack(expand=True)
+        
+        self.pages["strategy"] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = "strategy"
     
-    def show_results(self, result_lines: List[str]) -> None:
-        """显示计算结果"""
-        self.result_text.delete(1.0, tk.END)
-        for line in result_lines:
-            self.result_text.insert(tk.END, line + "\n")
-        self.calculate_btn.config(state="normal")
+    def create_backtest_page(self) -> None:
+        """创建回测分析页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 占位内容
+        ttk.Label(page_frame, text="回测分析功能开发中...", 
+                 style='Header.TLabel').pack(expand=True)
+        
+        self.pages["backtest"] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = "backtest"
     
-    def show_error(self, error_msg: str) -> None:
-        """显示错误信息"""
-        self.result_text.delete(1.0, tk.END)
-        self.result_text.insert(tk.END, f"错误: {error_msg}")
-        self.calculate_btn.config(state="normal")
+    def create_monitoring_page(self) -> None:
+        """创建监控面板页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 占位内容
+        ttk.Label(page_frame, text="监控面板功能开发中...", 
+                 style='Header.TLabel').pack(expand=True)
+        
+        self.pages["monitoring"] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = "monitoring"
     
-    def clear_results(self) -> None:
-        """清空结果"""
-        self.result_text.delete(1.0, tk.END)
+    def create_settings_page(self) -> None:
+        """创建设置页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 占位内容
+        ttk.Label(page_frame, text="设置功能开发中...", 
+                 style='Header.TLabel').pack(expand=True)
+        
+        self.pages["settings"] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = "settings"
+    
+    def create_placeholder_page(self, page_name: str) -> None:
+        """创建占位页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 占位内容
+        ttk.Label(page_frame, text=f"{page_name} 功能开发中...", 
+                 style='Header.TLabel').pack(expand=True)
+        
+        self.pages[page_name] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = page_name
 
 
 def main():

@@ -17,8 +17,8 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 setup(
     name="ai-trader",
     version="0.1.0",
-    author="AI Trader Team",
-    author_email="team@aitrader.com",
+    author="CeeYang",
+    author_email="ceeyang2024@gmail.com",
     description="AI数字货币量化交易系统",
     long_description=long_description,
     long_description_content_type="text/markdown",
