@@ -137,10 +137,13 @@ class BinanceDataSource(BaseDataSource):
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"获取当前价格失败: {str(e)}")
     
-    def get_available_symbols(self) -> List[str]:
+    def get_available_symbols(self, mainstream_only: bool = True) -> List[str]:
         """
         获取可用的交易对列表
         
+        Args:
+            mainstream_only: 是否只返回主流货币，默认为True
+            
         Returns:
             交易对列表
         """
@@ -156,12 +159,39 @@ class BinanceDataSource(BaseDataSource):
             for symbol_info in data['symbols']:
                 if (symbol_info['status'] == 'TRADING' and 
                     symbol_info['symbol'].endswith('USDT')):
-                    symbols.append(symbol_info['symbol'])
+                    
+                    # 如果只要主流货币，进行筛选
+                    if mainstream_only:
+                        base_asset = symbol_info['baseAsset']
+                        if self._is_mainstream_coin(base_asset):
+                            symbols.append(symbol_info['symbol'])
+                    else:
+                        symbols.append(symbol_info['symbol'])
             
             return sorted(symbols)
             
         except requests.exceptions.RequestException:
             return []
+    
+    def _is_mainstream_coin(self, base_asset: str) -> bool:
+        """
+        判断是否为主流货币
+        
+        Args:
+            base_asset: 基础资产名称
+            
+        Returns:
+            是否为主流货币
+        """
+        # 定义主流货币列表（基于市值和知名度）
+        mainstream_coins = {
+            'BTC', 'ETH', 'BNB', 'XRP', 'ADA', 'SOL', 'DOGE', 'DOT', 'AVAX', 
+            'MATIC', 'LTC', 'UNI', 'LINK', 'ATOM', 'NEAR', 'FTM', 'ALGO',
+            'VET', 'ICP', 'FIL', 'TRX', 'ETC', 'XLM', 'HBAR', 'MANA',
+            'SAND', 'AXS', 'CHZ', 'ENJ', 'BAT', 'ZEC', 'DASH', 'NEO'
+        }
+        
+        return base_asset in mainstream_coins
     
     def get_supported_intervals(self) -> List[str]:
         """

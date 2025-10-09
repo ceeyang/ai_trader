@@ -54,10 +54,23 @@ class DCAPage:
         # 币种选择
         ttk.Label(main_frame, text="选择币种:", 
                  font=('Arial', 10, 'bold')).grid(row=1, column=0, sticky=tk.W, pady=5, padx=(0, 10))
+        
+        # 币种选择框架
+        symbol_frame = ttk.Frame(main_frame)
+        symbol_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        symbol_frame.columnconfigure(0, weight=1)
+        
         self.symbol_var = tk.StringVar(value="SOLUSDT")
-        self.symbol_combo = ttk.Combobox(main_frame, textvariable=self.symbol_var, 
+        self.symbol_combo = ttk.Combobox(symbol_frame, textvariable=self.symbol_var, 
                                         state="readonly")
-        self.symbol_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(10, 0))
+        self.symbol_combo.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        
+        # 主流货币筛选选项
+        self.mainstream_only = tk.BooleanVar(value=True)
+        mainstream_check = ttk.Checkbutton(symbol_frame, text="仅显示主流货币", 
+                                         variable=self.mainstream_only,
+                                         command=self.on_mainstream_toggle)
+        mainstream_check.grid(row=0, column=1, sticky=tk.W, padx=(10, 0))
         
         # 开始日期选择
         ttk.Label(main_frame, text="开始日期:", 
@@ -119,7 +132,9 @@ class DCAPage:
             try:
                 self.data_source = BinanceDataSource()
                 if self.data_source.connect():
-                    symbols = self.data_source.get_available_symbols()
+                    # 根据主流货币选项加载币种
+                    mainstream_only = self.mainstream_only.get()
+                    symbols = self.data_source.get_available_symbols(mainstream_only)
                     if symbols:
                         self.symbols_list = symbols
                         self.parent.after(0, self.update_symbol_combo)
@@ -136,6 +151,11 @@ class DCAPage:
         
         # 在后台线程中加载币种
         threading.Thread(target=load_symbols_thread, daemon=True).start()
+    
+    def on_mainstream_toggle(self) -> None:
+        """主流货币筛选切换处理"""
+        # 重新加载币种列表
+        self.load_symbols()
     
     def update_symbol_combo(self) -> None:
         """更新币种下拉框"""
