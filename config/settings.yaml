@@ -1,0 +1,114 @@
+# AI数字货币量化交易系统配置文件
+
+app:
+  name: "AI Trader"
+  version: "0.1.0"
+  debug: false
+
+# 数据源配置
+data_sources:
+  binance:
+    base_url: "https://api.binance.com/api/v3"
+    timeout: 10
+    rate_limit_delay: 0.1
+    api_key: ""
+    secret_key: ""
+
+  okx:
+    base_url: "https://www.okx.com/api/v5"
+    timeout: 10
+    rate_limit_delay: 0.1
+    api_key: ""
+    secret_key: ""
+    passphrase: ""
+
+# 交易配置
+trading:
+  default_currency: "USDT"
+  min_order_amount: 10.0
+  max_order_amount: 10000.0
+  default_leverage: 1.0
+  risk_management:
+    max_position_size: 0.1 # 最大仓位比例
+    stop_loss_percentage: 0.05 # 止损百分比
+    take_profit_percentage: 0.1 # 止盈百分比
+
+# GUI配置
+gui:
+  window_size: [1200, 800]
+  theme: "default"
+  auto_save: true
+  refresh_interval: 1000 # 毫秒
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "logs/ai_trader.log"
+  max_size: "10MB"
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 数据库配置
+database:
+  type: "sqlite" # sqlite, postgresql
+  sqlite:
+    path: "data/ai_trader.db"
+  postgresql:
+    host: "localhost"
+    port: 5432
+    database: "ai_trader"
+    username: ""
+    password: ""
+
+# 策略配置
+strategies:
+  dca:
+    default_invest_amount: 200
+    default_invest_day: 10
+    supported_intervals: ["1d"]
+
+  technical:
+    sma:
+      short_period: 20
+      long_period: 50
+    rsi:
+      period: 14
+      overbought: 70
+      oversold: 30
+    bollinger:
+      period: 20
+      std_dev: 2
+
+# 回测配置
+backtesting:
+  initial_capital: 10000
+  commission: 0.001 # 手续费率
+  slippage: 0.0005 # 滑点
+  benchmark: "BTCUSDT"
+
+# 监控配置
+monitoring:
+  alerts:
+    email:
+      enabled: false
+      smtp_server: ""
+      smtp_port: 587
+      username: ""
+      password: ""
+      recipients: []
+
+    telegram:
+      enabled: false
+      bot_token: ""
+      chat_id: ""
+
+    webhook:
+      enabled: false
+      url: ""
+      secret: ""
+
+  dashboard:
+    refresh_interval: 5000 # 毫秒
+    show_pnl: true
+    show_positions: true
+    show_orders: true

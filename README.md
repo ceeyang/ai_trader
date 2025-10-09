@@ -1,6 +1,6 @@
-# 定投收益计算器
+# AI数字货币量化交易系统
 
-一个跨平台的GUI应用程序，用于计算加密货币定投收益。
+一个基于Python的AI数字货币量化交易系统，支持策略开发、回测、模拟交易、实盘交易和监控通知。
 
 ## 功能特性
 
@@ -10,101 +10,200 @@
 - 🗓️ **定投日期设置**: 选择每月定投的具体日期
 - 💵 **实时价格**: 使用当前市场价格计算收益
 - 📊 **详细报告**: 显示完整的定投历史和收益分析
+- 🤖 **AI策略**: 支持机器学习策略开发
+- 📈 **回测引擎**: 完整的策略回测功能
+- 🎯 **风险管理**: 内置风险管理模块
+- 📱 **GUI界面**: 现代化的用户界面
+- 🔧 **CLI工具**: 命令行接口支持
+
+## 项目结构
+
+```
+ai_trader/
+├── src/ai_trader/           # 主源代码
+│   ├── core/               # 核心模块
+│   │   ├── base/           # 基础类
+│   │   ├── data/           # 数据模块
+│   │   ├── trading/        # 交易模块
+│   │   └── utils/          # 工具模块
+│   ├── strategies/         # 策略模块
+│   │   ├── dca/           # 定投策略
+│   │   ├── ai/            # AI策略
+│   │   └── technical/     # 技术分析策略
+│   ├── backtesting/       # 回测模块
+│   ├── simulation/        # 模拟交易
+│   ├── monitoring/        # 监控模块
+│   └── gui/               # GUI模块
+├── config/                # 配置文件
+├── tests/                 # 测试文件
+├── docs/                  # 文档
+└── examples/              # 示例代码
+```
 
 ## 安装要求
 
 ### Python版本
-- Python 3.7 或更高版本
+- Python 3.8 或更高版本
 
 ### 依赖包
 ```bash
 pip install -r requirements.txt
 ```
 
-## 使用方法
+## 快速开始
 
-### 启动应用程序
+### 1. 安装依赖
 ```bash
-python dca_gui.py
+pip install -r requirements.txt
 ```
 
-### 操作步骤
+### 2. 启动GUI应用
+```bash
+python -m ai_trader.gui.main_window
+```
 
-1. **选择币种**: 从下拉列表中选择要定投的加密货币
-2. **设置时间范围**: 
-   - 开始日期: 定投开始的时间
-   - 结束日期: 定投结束的时间
-3. **设置定投参数**:
-   - 定投日期: 选择每月几号进行定投（1-31号）
-   - 定投金额: 每次定投的USDT金额
-4. **计算收益**: 点击"计算收益"按钮
-5. **查看结果**: 在结果区域查看详细的收益分析
+### 3. 使用CLI工具
+```bash
+# 定投收益计算
+python -m ai_trader.cli dca --symbol BTCUSDT --amount 200 --day 10 --start-date 2024-01-01
 
-### 界面说明
+# 策略管理
+python -m ai_trader.cli strategy --list
 
-- **币种选择**: 自动加载币安所有USDT交易对
-- **日期格式**: 使用YYYY-MM-DD格式（如：2024-01-01）
-- **定投日期**: 选择每月几号进行定投
-- **计算结果**: 显示详细的定投历史和收益汇总
+# 回测
+python -m ai_trader.cli backtest --strategy DCA --start-date 2024-01-01 --end-date 2024-12-31
+```
 
-## 功能说明
+## 使用方法
 
-### 支持的币种
-- 自动从币安API获取所有USDT交易对
-- 包括BTC、ETH、BNB、SOL等主流币种
+### GUI界面
 
-### 计算逻辑
-- 使用历史K线数据获取定投日期的实际价格
-- 使用当前实时价格计算总价值
-- 提供详细的收益分析和平均成本计算
+1. **启动应用**: 运行 `python -m ai_trader.gui.main_window`
+2. **选择币种**: 从下拉列表中选择要定投的加密货币
+3. **设置参数**: 配置定投日期、金额和时间范围
+4. **计算收益**: 点击"计算收益"按钮查看结果
 
-### 输出信息
-- 定投详情：每次定投的日期、价格、买入数量
-- 收益汇总：总投入、当前价值、收益、收益率
-- 统计信息：累计买入数量、平均成本
+### 命令行工具
 
-## 技术特性
+#### 定投计算
+```bash
+python -m ai_trader.cli dca \
+  --symbol BTCUSDT \
+  --amount 200 \
+  --day 10 \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31
+```
 
-- **跨平台**: 基于Python tkinter，支持所有主流操作系统
-- **异步处理**: 网络请求在后台线程执行，不阻塞UI
-- **错误处理**: 完善的错误提示和异常处理
-- **实时数据**: 使用币安API获取实时价格和历史数据
+#### 策略管理
+```bash
+# 列出可用策略
+python -m ai_trader.cli strategy --list
 
-## 注意事项
+# 运行策略
+python -m ai_trader.cli strategy --run DCA
+```
 
-1. 需要网络连接来获取价格数据
-2. 币种列表会在启动时自动加载
-3. 计算过程可能需要几秒钟时间
-4. 确保输入的日期格式正确
+#### 回测
+```bash
+python -m ai_trader.cli backtest \
+  --strategy DCA \
+  --start-date 2024-01-01 \
+  --end-date 2024-12-31 \
+  --initial-capital 10000
+```
 
-## 系统要求
+## 配置
 
-- Windows 10/11
-- macOS 10.14 或更高版本
-- Linux (Ubuntu 18.04+, CentOS 7+, 等)
-- Python 3.7+
-- 网络连接
+系统使用YAML配置文件进行配置管理，配置文件位于 `config/settings.yaml`。
 
-## 故障排除
+### 主要配置项
 
-### 常见问题
+- **数据源配置**: 配置各种交易所API
+- **交易配置**: 设置交易参数和风险管理
+- **策略配置**: 配置各种策略参数
+- **监控配置**: 设置告警和通知
 
-1. **无法获取币种列表**
-   - 检查网络连接
-   - 确认防火墙设置
+## 开发指南
 
-2. **计算失败**
-   - 检查输入的日期格式
-   - 确认币种名称正确
-   - 检查网络连接
+### 添加新策略
 
-3. **GUI无法启动**
-   - 确认Python版本 >= 3.7
-   - 安装所需依赖包
+1. 在 `src/ai_trader/strategies/` 下创建新策略目录
+2. 继承 `BaseStrategy` 类
+3. 实现必要的方法
+4. 添加测试用例
 
-## 开发信息
+### 添加新数据源
 
-- 开发语言: Python 3
-- GUI框架: tkinter
-- 数据源: 币安API
-- 许可证: MIT
+1. 在 `src/ai_trader/core/data/providers/` 下创建新数据源
+2. 继承 `BaseDataSource` 类
+3. 实现必要的方法
+4. 添加测试用例
+
+### 运行测试
+
+```bash
+# 运行所有测试
+pytest
+
+# 运行特定测试
+pytest tests/unit/test_dca_strategy.py
+
+# 生成覆盖率报告
+pytest --cov=src/ai_trader --cov-report=html
+```
+
+## 架构设计
+
+### 核心模块
+
+- **BaseStrategy**: 策略基类，定义策略接口
+- **BaseDataSource**: 数据源基类，定义数据获取接口
+- **BaseBroker**: 经纪商基类，定义交易接口
+
+### 设计原则
+
+1. **单一职责**: 每个模块只负责一个特定功能
+2. **依赖注入**: 通过接口和抽象类实现松耦合
+3. **配置驱动**: 通过配置文件管理参数
+4. **可测试性**: 每个模块都有对应的测试
+5. **可扩展性**: 易于添加新的策略和数据源
+
+## 技术栈
+
+- **核心语言**: Python 3.8+
+- **GUI框架**: tkinter (跨平台)
+- **数据处理**: pandas, numpy
+- **机器学习**: scikit-learn, tensorflow/pytorch
+- **数据库**: SQLite/PostgreSQL
+- **API**: requests, websockets
+- **测试**: pytest
+- **日志**: logging
+- **配置**: pyyaml
+
+## 贡献指南
+
+1. Fork 项目
+2. 创建功能分支
+3. 提交更改
+4. 推送到分支
+5. 创建 Pull Request
+
+## 许可证
+
+MIT License
+
+## 联系方式
+
+- 项目主页: https://github.com/ai-trader/ai-trader
+- 问题反馈: https://github.com/ai-trader/ai-trader/issues
+- 邮箱: team@aitrader.com
+
+## 更新日志
+
+### v0.1.0 (2024-01-01)
+- 初始版本发布
+- 支持定投策略
+- 基础GUI界面
+- CLI工具
+- 币安数据源集成

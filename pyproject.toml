@@ -1,0 +1,129 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-trader"
+version = "0.1.0"
+description = "AI数字货币量化交易系统"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "AI Trader Team", email = "team@aitrader.com"}
+]
+keywords = ["trading", "cryptocurrency", "quantitative", "ai", "backtesting"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
+dependencies = [
+    "requests>=2.25.0",
+    "pandas>=1.3.0",
+    "numpy>=1.21.0",
+    "pyyaml>=6.0",
+    "sqlalchemy>=1.4.0",
+    "websockets>=10.0",
+    "pytest>=6.0.0",
+    "pytest-cov>=2.12.0",
+    "black>=21.0.0",
+    "flake8>=3.9.0",
+    "mypy>=0.910",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0.0",
+    "pytest-cov>=2.12.0",
+    "black>=21.0.0",
+    "flake8>=3.9.0",
+    "mypy>=0.910",
+    "pre-commit>=2.15.0",
+]
+ml = [
+    "scikit-learn>=1.0.0",
+    "tensorflow>=2.8.0",
+    "torch>=1.11.0",
+]
+gui = [
+    "tkinter",
+]
+database = [
+    "psycopg2-binary>=2.9.0",
+    "sqlite3",
+]
+
+[project.urls]
+Homepage = "https://github.com/ai-trader/ai-trader"
+Documentation = "https://ai-trader.readthedocs.io"
+Repository = "https://github.com/ai-trader/ai-trader"
+Issues = "https://github.com/ai-trader/ai-trader/issues"
+
+[project.scripts]
+ai-trader = "ai_trader.cli:main"
+ai-trader-gui = "ai_trader.gui.main_window:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src/ai_trader",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
