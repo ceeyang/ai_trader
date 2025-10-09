@@ -7,11 +7,13 @@
 ## 启动方式
 
 ### 1. GUI应用程序（推荐）
+
 ```bash
 python start_gui.py
 ```
 
 ### 2. CLI工具（推荐）
+
 ```bash
 # 查看帮助
 python start_cli.py --help
@@ -24,6 +26,7 @@ python start_cli.py strategy --list
 ```
 
 ### 3. 备用启动方式
+
 ```bash
 # 直接使用模块
 python -m ai_trader.gui.main_window
@@ -48,11 +51,13 @@ python -m ai_trader.cli dca --help
 ## 测试结果
 
 ✅ **CLI工具测试成功**
+
 - 定投计算功能正常
 - SOLUSDT定投收益：36.19%（13次投资，总投入2600 USDT，当前价值3540.96 USDT）
 - ETHUSDT定投收益：60.25%（13次投资，总投入1300 USDT，当前价值2083.25 USDT）
 
 ✅ **GUI应用程序**
+
 - 启动脚本修复完成
 - 可以正常启动GUI界面
 - 新的启动脚本`start_gui.py`工作正常
@@ -60,11 +65,13 @@ python -m ai_trader.cli dca --help
 ## 使用示例
 
 ### 定投计算示例
+
 ```bash
 python run_cli.py dca --symbol BTCUSDT --amount 100 --day 15 --start-date 2024-01-01 --end-date 2024-12-31
 ```
 
 ### 支持的币种
+
 - BTCUSDT (比特币)
 - ETHUSDT (以太坊)
 - BNBUSDT (币安币)
@@ -84,16 +91,19 @@ python run_cli.py dca --symbol BTCUSDT --amount 100 --day 15 --start-date 2024-0
 如果遇到问题：
 
 1. **确保依赖已安装**：
+
    ```bash
    pip install -r requirements.txt
    ```
 
 2. **重新安装开发版本**：
+
    ```bash
    pip install -e .
    ```
 
 3. **检查Python路径**：
+
    ```bash
    python -c "import ai_trader; print('模块导入成功')"
    ```

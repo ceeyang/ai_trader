@@ -18,7 +18,7 @@
 
 ## 项目结构
 
-```
+```text
 ai_trader/
 ├── src/ai_trader/           # 主源代码
 │   ├── core/               # 核心模块
@@ -43,9 +43,11 @@ ai_trader/
 ## 安装要求
 
 ### Python版本
+
 - Python 3.8 或更高版本
 
 ### 依赖包
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -53,16 +55,19 @@ pip install -r requirements.txt
 ## 快速开始
 
 ### 1. 安装依赖
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 2. 启动GUI应用
+
 ```bash
 python -m ai_trader.gui.main_window
 ```
 
 ### 3. 使用CLI工具
+
 ```bash
 # 定投收益计算
 python -m ai_trader.cli dca --symbol BTCUSDT --amount 200 --day 10 --start-date 2024-01-01
@@ -86,6 +91,7 @@ python -m ai_trader.cli backtest --strategy DCA --start-date 2024-01-01 --end-da
 ### 命令行工具
 
 #### 定投计算
+
 ```bash
 python -m ai_trader.cli dca \
   --symbol BTCUSDT \
@@ -96,6 +102,7 @@ python -m ai_trader.cli dca \
 ```
 
 #### 策略管理
+
 ```bash
 # 列出可用策略
 python -m ai_trader.cli strategy --list
@@ -105,6 +112,7 @@ python -m ai_trader.cli strategy --run DCA
 ```
 
 #### 回测
+
 ```bash
 python -m ai_trader.cli backtest \
   --strategy DCA \
@@ -202,6 +210,7 @@ MIT License
 ## 更新日志
 
 ### v0.1.0 (2024-01-01)
+
 - 初始版本发布
 - 支持定投策略
 - 基础GUI界面

@@ -126,3 +126,5 @@ data/processed/
 backup/
 *.bak
 *.backup
+
+CLEANUP_SUMMARY
