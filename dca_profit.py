@@ -4,12 +4,13 @@ from datetime import datetime, timedelta
 # ------------------------------
 # 配置部分
 # ------------------------------
-SYMBOL = "BNBUSDT"       # 定投币种
+SYMBOL = "SOLUSDT"       # 定投币种
 INTERVAL = "1d"          # 日K线
 MONTHLY_INVEST = 200      # 每月投入金额 USDT
 NUM_MONTHS = 12           # 最近 12 个月
 INVEST_DAY = 10           # 每月定投日期（10号）
 BINANCE_API = "https://api.binance.com/api/v3/klines"
+BINANCE_TICKER_API = "https://api.binance.com/api/v3/ticker/price"
 
 # ------------------------------
 # 获取历史K线数据
@@ -66,6 +67,25 @@ def filter_investment_dates(klines: list, invest_day: int) -> list:
     return investment_data
 
 # ------------------------------
+# 获取当前实时价格
+# ------------------------------
+def get_current_price(symbol: str) -> float:
+    """
+    获取指定交易对的当前实时价格
+    :param symbol: 交易对符号
+    :return: 当前价格
+    """
+    try:
+        params = {"symbol": symbol}
+        resp = requests.get(BINANCE_TICKER_API, params=params)
+        data = resp.json()
+        current_price: float = float(data['price'])
+        return current_price
+    except Exception as e:
+        print(f"获取当前价格失败: {e}")
+        return 0.0
+
+# ------------------------------
 # 计算定投收益
 # ------------------------------
 def calculate_dca_profit(investment_data: list, monthly_invest: float) -> None:
@@ -86,14 +106,21 @@ def calculate_dca_profit(investment_data: list, monthly_invest: float) -> None:
         total_invested += monthly_invest
         print(f"{k['date']}: 价格={k['close']:.2f} USDT, 买入={coins_bought:.6f} {SYMBOL}")
     
-    # 获取最新价格（使用最后一个定投日期的价格作为当前价格）
-    current_price: float = investment_data[-1]['close']
+    # 获取当前实时价格
+    print("\n正在获取当前实时价格...")
+    current_price: float = get_current_price(SYMBOL)
+    
+    if current_price == 0.0:
+        print("无法获取当前价格，使用最后一个定投日期的价格")
+        current_price = investment_data[-1]['close']
+    
     total_value: float = total_coins * current_price
     profit: float = total_value - total_invested
     profit_rate: float = profit / total_invested * 100
     
     print("\n" + "=" * 50)
     print("定投收益汇总：")
+    print(f"当前价格: {current_price:.2f} USDT")
     print(f"总投入: {total_invested:.2f} USDT")
     print(f"当前总价值: {total_value:.2f} USDT")
     print(f"收益: {profit:.2f} USDT")
