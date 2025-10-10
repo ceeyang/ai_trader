@@ -9,6 +9,7 @@ from tkinter import ttk
 from typing import Optional, Dict
 
 from .pages import DCAPage
+from .pages.technical_analysis_page import TechnicalAnalysisPage
 
 
 class MainWindow:
@@ -98,6 +99,7 @@ class MainWindow:
         # 导航按钮列表
         nav_buttons = [
             ("定投计算", "dca"),
+            ("技术分析", "technical"),
             ("策略管理", "strategy"),
             ("回测分析", "backtest"),
             ("监控面板", "monitoring"),
@@ -148,6 +150,8 @@ class MainWindow:
         # 创建新页面
         if page_name == "dca":
             self.create_dca_page()
+        elif page_name == "technical":
+            self.create_technical_page()
         elif page_name == "strategy":
             self.create_strategy_page()
         elif page_name == "backtest":
@@ -180,6 +184,21 @@ class MainWindow:
         self.pages["dca"] = page_frame
         self.current_page = page_frame
         self.current_page_name = "dca"
+    
+    def create_technical_page(self) -> None:
+        """创建技术分析页面"""
+        page_frame = ttk.Frame(self.content_frame, style='Content.TFrame')
+        page_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 配置页面自适应
+        page_frame.columnconfigure(0, weight=1)
+        page_frame.rowconfigure(0, weight=1)
+        
+        # 创建技术分析页面实例
+        technical_page = TechnicalAnalysisPage(page_frame)
+        self.pages["technical"] = page_frame
+        self.current_page = page_frame
+        self.current_page_name = "technical"
     
     def create_strategy_page(self) -> None:
         """创建策略管理页面"""
