@@ -44,40 +44,48 @@ class TechnicalAnalysisPage:
         main_frame = ttk.Frame(self.parent)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # 创建滚动区域
-        canvas = tk.Canvas(main_frame)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        # 配置主框架网格
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=2)
+        main_frame.rowconfigure(0, weight=1)
         
-        scrollable_frame.bind(
+        # 左侧控制面板
+        left_panel = ttk.Frame(main_frame)
+        left_panel.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        left_panel.columnconfigure(0, weight=1)
+        
+        # 右侧结果显示区域
+        right_panel = ttk.Frame(main_frame)
+        right_panel.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        right_panel.columnconfigure(0, weight=1)
+        right_panel.rowconfigure(0, weight=1)
+        
+        # 创建滚动区域用于左侧面板
+        left_canvas = tk.Canvas(left_panel)
+        left_scrollbar = ttk.Scrollbar(left_panel, orient="vertical", command=left_canvas.yview)
+        left_scrollable_frame = ttk.Frame(left_canvas)
+        
+        left_scrollable_frame.bind(
             "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all"))
         )
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        left_canvas.create_window((0, 0), window=left_scrollable_frame, anchor="nw")
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
         
-        # 数据获取区域
-        self.create_data_section(scrollable_frame)
+        # 在左侧面板创建控制区域
+        self.create_data_section(left_scrollable_frame)
+        self.create_indicators_section(left_scrollable_frame)
+        self.create_patterns_section(left_scrollable_frame)
+        self.create_signals_section(left_scrollable_frame)
+        self.create_backtest_section(left_scrollable_frame)
         
-        # 技术指标区域
-        self.create_indicators_section(scrollable_frame)
+        # 在右侧面板创建结果显示区域
+        self.create_results_section(right_panel)
         
-        # K线形态区域
-        self.create_patterns_section(scrollable_frame)
-        
-        # 信号检测区域
-        self.create_signals_section(scrollable_frame)
-        
-        # 回测分析区域
-        self.create_backtest_section(scrollable_frame)
-        
-        # 结果显示区域
-        self.create_results_section(scrollable_frame)
-        
-        # 布局滚动区域
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 布局左侧滚动区域
+        left_canvas.pack(side="left", fill="both", expand=True)
+        left_scrollbar.pack(side="right", fill="y")
     
     def create_data_section(self, parent: ttk.Frame) -> None:
         """创建数据获取区域"""
@@ -403,7 +411,7 @@ class TechnicalAnalysisPage:
         """创建结果显示区域"""
         # 结果框架
         results_frame = ttk.LabelFrame(parent, text="分析结果", padding=10)
-        results_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        results_frame.pack(fill=tk.BOTH, expand=True)
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(1, weight=1)
         
@@ -427,17 +435,71 @@ class TechnicalAnalysisPage:
         self.exit_signals_label = ttk.Label(stats_frame, text="0", foreground="red")
         self.exit_signals_label.grid(row=0, column=5, sticky=tk.W, padx=(0, 20))
         
+        # 创建选项卡
+        notebook = ttk.Notebook(results_frame)
+        notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        
+        # 分析结果选项卡
+        results_tab = ttk.Frame(notebook)
+        notebook.add(results_tab, text="分析结果")
+        results_tab.columnconfigure(0, weight=1)
+        results_tab.rowconfigure(0, weight=1)
+        
         # 结果文本框
-        self.results_text = tk.Text(results_frame, height=15, width=80)
-        results_scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=self.results_text.yview)
+        self.results_text = tk.Text(results_tab, height=20, width=60)
+        results_scrollbar = ttk.Scrollbar(results_tab, orient="vertical", command=self.results_text.yview)
         self.results_text.configure(yscrollcommand=results_scrollbar.set)
         
-        self.results_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
-        results_scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S), pady=5)
+        self.results_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        results_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S), pady=5)
+        
+        # 信号详情选项卡
+        signals_tab = ttk.Frame(notebook)
+        notebook.add(signals_tab, text="信号详情")
+        signals_tab.columnconfigure(0, weight=1)
+        signals_tab.rowconfigure(0, weight=1)
+        
+        # 信号详情文本框
+        self.signals_text = tk.Text(signals_tab, height=20, width=60)
+        signals_scrollbar = ttk.Scrollbar(signals_tab, orient="vertical", command=self.signals_text.yview)
+        self.signals_text.configure(yscrollcommand=signals_scrollbar.set)
+        
+        self.signals_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        signals_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S), pady=5)
+        
+        # 回测结果选项卡
+        backtest_tab = ttk.Frame(notebook)
+        notebook.add(backtest_tab, text="回测结果")
+        backtest_tab.columnconfigure(0, weight=1)
+        backtest_tab.rowconfigure(0, weight=1)
+        
+        # 回测结果文本框
+        self.backtest_text = tk.Text(backtest_tab, height=20, width=60)
+        backtest_scrollbar = ttk.Scrollbar(backtest_tab, orient="vertical", command=self.backtest_text.yview)
+        self.backtest_text.configure(yscrollcommand=backtest_scrollbar.set)
+        
+        self.backtest_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        backtest_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S), pady=5)
+        
+        # 按钮区域
+        button_frame = ttk.Frame(results_frame)
+        button_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
         
         # 清空按钮
-        clear_btn = ttk.Button(results_frame, text="清空结果", command=self.clear_results)
-        clear_btn.grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        clear_btn = ttk.Button(button_frame, text="清空结果", command=self.clear_results)
+        clear_btn.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        
+        # 导出按钮
+        export_btn = ttk.Button(button_frame, text="导出结果", command=self.export_results)
+        export_btn.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        
+        # 保存配置按钮
+        save_config_btn = ttk.Button(button_frame, text="保存配置", command=self.save_config)
+        save_config_btn.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+        
+        # 加载配置按钮
+        load_config_btn = ttk.Button(button_frame, text="加载配置", command=self.load_config)
+        load_config_btn.grid(row=0, column=3, sticky=tk.W)
     
     def init_data_source(self) -> None:
         """初始化数据源"""
@@ -530,23 +592,28 @@ class TechnicalAnalysisPage:
             self.entry_signals_label.config(text=str(entry_signals.sum()))
             self.exit_signals_label.config(text=str(exit_signals.sum()))
             
-            # 显示结果
+            # 显示结果到分析结果选项卡
             self.log_result(f"\n=== 信号分析结果 ===")
             self.log_result(f"入场信号: {entry_signals.sum()} 个")
             self.log_result(f"出场信号: {exit_signals.sum()} 个")
             
-            # 显示具体的信号点
+            # 显示具体的信号点到信号详情选项卡
+            self.log_signals(f"\n=== 信号详情 ===")
             if entry_signals.sum() > 0:
-                self.log_result(f"\n入场机会:")
+                self.log_signals(f"\n入场机会:")
                 entry_opportunities = self.historical_data[entry_signals]
-                for date, row in entry_opportunities.tail(10).iterrows():
-                    self.log_result(f"  {date.strftime('%Y-%m-%d')}: 价格 {row['close']:.2f}")
+                for date, row in entry_opportunities.tail(20).iterrows():
+                    self.log_signals(f"  {date.strftime('%Y-%m-%d')}: 价格 {row['close']:.2f}")
+            else:
+                self.log_signals(f"\n未发现入场机会")
             
             if exit_signals.sum() > 0:
-                self.log_result(f"\n出场机会:")
+                self.log_signals(f"\n出场机会:")
                 exit_opportunities = self.historical_data[exit_signals]
-                for date, row in exit_opportunities.tail(10).iterrows():
-                    self.log_result(f"  {date.strftime('%Y-%m-%d')}: 价格 {row['close']:.2f}")
+                for date, row in exit_opportunities.tail(20).iterrows():
+                    self.log_signals(f"  {date.strftime('%Y-%m-%d')}: 价格 {row['close']:.2f}")
+            else:
+                self.log_signals(f"\n未发现出场机会")
             
             # 分析信号有效性
             self.analyze_signal_effectiveness(signal_detector)
@@ -738,7 +805,7 @@ class TechnicalAnalysisPage:
             # 运行回测
             result = backtest_engine.run_backtest()
             
-            # 显示结果
+            # 显示结果到分析结果选项卡
             self.log_result(f"\n=== 回测结果 ===")
             self.log_result(f"总交易次数: {result.total_trades}")
             self.log_result(f"盈利交易: {result.winning_trades}")
@@ -749,15 +816,30 @@ class TechnicalAnalysisPage:
             self.log_result(f"夏普比率: {result.sharpe_ratio:.2f}")
             self.log_result(f"平均持仓天数: {result.avg_trade_duration:.1f}天")
             
+            # 显示详细交易记录到回测结果选项卡
+            self.log_backtest(f"\n=== 回测详细结果 ===")
+            self.log_backtest(f"总交易次数: {result.total_trades}")
+            self.log_backtest(f"盈利交易: {result.winning_trades}")
+            self.log_backtest(f"亏损交易: {result.losing_trades}")
+            self.log_backtest(f"胜率: {result.win_rate:.2%}")
+            self.log_backtest(f"总收益率: {result.total_return:.2%}")
+            self.log_backtest(f"最大回撤: {result.max_drawdown:.2f}")
+            self.log_backtest(f"夏普比率: {result.sharpe_ratio:.2f}")
+            self.log_backtest(f"平均持仓天数: {result.avg_trade_duration:.1f}天")
+            
             # 显示详细交易记录
             if result.trades:
-                self.log_result(f"\n=== 详细交易记录 ===")
-                for i, trade in enumerate(result.trades[:10]):  # 只显示前10笔
-                    self.log_result(f"交易 {i+1}:")
-                    self.log_result(f"  入场: {trade.entry_time.strftime('%Y-%m-%d')} {trade.entry_price:.2f}")
-                    self.log_result(f"  出场: {trade.exit_time.strftime('%Y-%m-%d')} {trade.exit_price:.2f}")
-                    self.log_result(f"  盈亏: {trade.pnl:.2f} ({trade.pnl_percent:.2%})")
-                    self.log_result(f"  持仓: {trade.duration}天")
+                self.log_backtest(f"\n=== 详细交易记录 ===")
+                for i, trade in enumerate(result.trades[:20]):  # 显示前20笔
+                    self.log_backtest(f"交易 {i+1}:")
+                    self.log_backtest(f"  入场: {trade.entry_time.strftime('%Y-%m-%d')} {trade.entry_price:.2f}")
+                    self.log_backtest(f"  出场: {trade.exit_time.strftime('%Y-%m-%d')} {trade.exit_price:.2f}")
+                    self.log_backtest(f"  盈亏: {trade.pnl:.2f} ({trade.pnl_percent:.2%})")
+                    self.log_backtest(f"  持仓: {trade.duration}天")
+                    self.log_backtest(f"  信号强度: {trade.signal_strength:.2f}")
+                    self.log_backtest("")
+            else:
+                self.log_backtest(f"\n无交易记录")
             
         except Exception as e:
             self.log_result(f"回测失败: {str(e)}")
@@ -766,16 +848,134 @@ class TechnicalAnalysisPage:
             self.backtest_btn.config(state="normal", text="运行回测")
     
     def log_result(self, message: str) -> None:
-        """记录结果到文本框"""
+        """记录结果到分析结果文本框"""
         self.results_text.insert(tk.END, message + "\n")
         self.results_text.see(tk.END)
     
+    def log_signals(self, message: str) -> None:
+        """记录信号详情到信号详情文本框"""
+        self.signals_text.insert(tk.END, message + "\n")
+        self.signals_text.see(tk.END)
+    
+    def log_backtest(self, message: str) -> None:
+        """记录回测结果到回测结果文本框"""
+        self.backtest_text.insert(tk.END, message + "\n")
+        self.backtest_text.see(tk.END)
+    
     def clear_results(self) -> None:
-        """清空结果"""
+        """清空所有结果"""
         self.results_text.delete(1.0, tk.END)
+        self.signals_text.delete(1.0, tk.END)
+        self.backtest_text.delete(1.0, tk.END)
         self.entry_signals_label.config(text="0")
         self.exit_signals_label.config(text="0")
         self.data_count_label.config(text="0")
+    
+    def export_results(self) -> None:
+        """导出结果到文件"""
+        try:
+            from tkinter import filedialog
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+            )
+            if filename:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write("=== 分析结果 ===\n")
+                    f.write(self.results_text.get(1.0, tk.END))
+                    f.write("\n=== 信号详情 ===\n")
+                    f.write(self.signals_text.get(1.0, tk.END))
+                    f.write("\n=== 回测结果 ===\n")
+                    f.write(self.backtest_text.get(1.0, tk.END))
+                self.log_result(f"结果已导出到: {filename}")
+        except Exception as e:
+            self.log_result(f"导出失败: {str(e)}")
+    
+    def save_config(self) -> None:
+        """保存当前配置"""
+        try:
+            from tkinter import filedialog
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
+            )
+            if filename:
+                import json
+                config = {
+                    "symbol": self.symbol_var.get(),
+                    "start_date": self.start_date_var.get(),
+                    "end_date": self.end_date_var.get(),
+                    "interval": self.interval_var.get(),
+                    "sma_periods": self.sma_periods.get(),
+                    "macd_fast": self.macd_fast.get(),
+                    "macd_slow": self.macd_slow.get(),
+                    "macd_signal": self.macd_signal.get(),
+                    "rsi_period": self.rsi_period.get(),
+                    "rsi_oversold": self.rsi_oversold.get(),
+                    "rsi_overbought": self.rsi_overbought.get(),
+                    "kdj_k_period": self.kdj_k_period.get(),
+                    "kdj_d_period": self.kdj_d_period.get(),
+                    "kdj_j_period": self.kdj_j_period.get(),
+                    "bb_period": self.bb_period.get(),
+                    "bb_std_dev": self.bb_std_dev.get(),
+                    "signal_combination": self.signal_combination.get(),
+                    "min_conditions": self.min_conditions.get(),
+                    "trend_required": self.trend_required.get(),
+                    "macd_required": self.macd_required.get(),
+                    "rsi_required": self.rsi_required.get(),
+                    "kdj_required": self.kdj_required.get(),
+                    "bb_required": self.bb_required.get(),
+                    "pattern_required": self.pattern_required.get(),
+                    "volume_required": self.volume_required.get()
+                }
+                with open(filename, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+                self.log_result(f"配置已保存到: {filename}")
+        except Exception as e:
+            self.log_result(f"保存配置失败: {str(e)}")
+    
+    def load_config(self) -> None:
+        """加载配置"""
+        try:
+            from tkinter import filedialog
+            filename = filedialog.askopenfilename(
+                filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
+            )
+            if filename:
+                import json
+                with open(filename, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                # 应用配置
+                self.symbol_var.set(config.get("symbol", "BTCUSDT"))
+                self.start_date_var.set(config.get("start_date", "2025-01-01"))
+                self.end_date_var.set(config.get("end_date", "2025-10-10"))
+                self.interval_var.set(config.get("interval", "1d"))
+                self.sma_periods.set(config.get("sma_periods", "5,10,20,50,200"))
+                self.macd_fast.set(config.get("macd_fast", "12"))
+                self.macd_slow.set(config.get("macd_slow", "26"))
+                self.macd_signal.set(config.get("macd_signal", "9"))
+                self.rsi_period.set(config.get("rsi_period", "14"))
+                self.rsi_oversold.set(config.get("rsi_oversold", "30"))
+                self.rsi_overbought.set(config.get("rsi_overbought", "70"))
+                self.kdj_k_period.set(config.get("kdj_k_period", "9"))
+                self.kdj_d_period.set(config.get("kdj_d_period", "3"))
+                self.kdj_j_period.set(config.get("kdj_j_period", "3"))
+                self.bb_period.set(config.get("bb_period", "20"))
+                self.bb_std_dev.set(config.get("bb_std_dev", "2"))
+                self.signal_combination.set(config.get("signal_combination", "all"))
+                self.min_conditions.set(config.get("min_conditions", "2"))
+                self.trend_required.set(config.get("trend_required", True))
+                self.macd_required.set(config.get("macd_required", True))
+                self.rsi_required.set(config.get("rsi_required", True))
+                self.kdj_required.set(config.get("kdj_required", True))
+                self.bb_required.set(config.get("bb_required", True))
+                self.pattern_required.set(config.get("pattern_required", True))
+                self.volume_required.set(config.get("volume_required", True))
+                
+                self.log_result(f"配置已从 {filename} 加载")
+        except Exception as e:
+            self.log_result(f"加载配置失败: {str(e)}")
     
     def quick_test_signals(self) -> None:
         """快速测试信号"""
