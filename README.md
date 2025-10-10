@@ -13,6 +13,8 @@
 - 🤖 **AI策略**: 支持机器学习策略开发
 - 📈 **回测引擎**: 完整的策略回测功能
 - 🎯 **风险管理**: 内置风险管理模块
+- 📊 **技术分析**: 完整的技术指标和K线形态识别
+- 🔍 **信号检测**: 智能交易信号生成和验证
 - 📱 **GUI界面**: 现代化的用户界面
 - 🔧 **CLI工具**: 命令行接口支持
 
@@ -24,6 +26,7 @@ ai_trader/
 │   ├── core/               # 核心模块
 │   │   ├── base/           # 基础类
 │   │   ├── data/           # 数据模块
+│   │   ├── analysis/       # 技术分析模块
 │   │   ├── trading/        # 交易模块
 │   │   └── utils/          # 工具模块
 │   ├── strategies/         # 策略模块
@@ -78,6 +81,38 @@ python -m ai_trader.cli strategy --list
 # 回测
 python -m ai_trader.cli backtest --strategy DCA --start-date 2024-01-01 --end-date 2024-12-31
 ```
+
+## 技术分析模块
+
+### 功能特性
+
+- **技术指标计算**: 移动平均线、MACD、RSI、KDJ、布林带等
+- **K线形态识别**: 锤子线、十字星、吞没形态、启明星等
+- **交易信号检测**: 综合多种信号生成入场和出场信号
+- **回测分析**: 测试策略的历史表现和参数优化
+
+### 使用示例
+
+```python
+from src.ai_trader.core.analysis import TechnicalIndicators, SignalDetector, BacktestEngine
+
+# 计算技术指标
+indicators = TechnicalIndicators(data)
+sma_20 = indicators.sma(20)
+rsi = indicators.rsi(14)
+macd_dif, macd_dea, macd_hist = indicators.macd()
+
+# 检测交易信号
+signal_detector = SignalDetector(data)
+entry_signals = signal_detector.get_comprehensive_entry_signals()
+exit_signals = signal_detector.get_comprehensive_exit_signals()
+
+# 运行回测
+backtest_engine = BacktestEngine(data, initial_capital=100000)
+result = backtest_engine.run_backtest()
+```
+
+详细使用说明请参考 [技术分析指南](TECHNICAL_ANALYSIS_GUIDE.md)。
 
 ## 使用方法
 
