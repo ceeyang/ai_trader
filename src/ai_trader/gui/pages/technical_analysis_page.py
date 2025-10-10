@@ -47,13 +47,11 @@ class TechnicalAnalysisPage:
         
         # 为左侧面板配置样式，确保背景色填充
         style.configure('LeftPanel.TFrame', 
-                       background='#f0f0f0',  # 浅灰色背景
                        relief='flat',
                        borderwidth=0)
         
         # 为右侧面板配置样式
         style.configure('RightPanel.TFrame',
-                       background='white',
                        relief='flat',
                        borderwidth=0)
     
@@ -611,7 +609,7 @@ class TechnicalAnalysisPage:
                 self.log_signals(f"\n入场机会:")
                 entry_opportunities = self.historical_data[entry_signals]
                 for date, row in entry_opportunities.tail(20).iterrows():
-                    self.log_signals(f"  {date.strftime('%Y-%m-%d')}: 价格 {row['close']:.2f}")
+                    self.log_signals(f"  {date.strftime('%Y-%m-%d %H:%M')}: 价格 {row['close']:.2f}")
             else:
                 self.log_signals(f"\n未发现入场机会")
             
@@ -619,7 +617,7 @@ class TechnicalAnalysisPage:
                 self.log_signals(f"\n出场机会:")
                 exit_opportunities = self.historical_data[exit_signals]
                 for date, row in exit_opportunities.tail(20).iterrows():
-                    self.log_signals(f"  {date.strftime('%Y-%m-%d')}: 价格 {row['close']:.2f}")
+                    self.log_signals(f"  {date.strftime('%Y-%m-%d %H:%M')}: 价格 {row['close']:.2f}")
             else:
                 self.log_signals(f"\n未发现出场机会")
             
@@ -840,8 +838,8 @@ class TechnicalAnalysisPage:
                 self.log_backtest(f"\n=== 详细交易记录 ===")
                 for i, trade in enumerate(result.trades[:20]):  # 显示前20笔
                     self.log_backtest(f"交易 {i+1}:")
-                    self.log_backtest(f"  入场: {trade.entry_time.strftime('%Y-%m-%d')} {trade.entry_price:.2f}")
-                    self.log_backtest(f"  出场: {trade.exit_time.strftime('%Y-%m-%d')} {trade.exit_price:.2f}")
+                    self.log_backtest(f"  入场: {trade.entry_time.strftime('%Y-%m-%d %H:%M')} {trade.entry_price:.2f}")
+                    self.log_backtest(f"  出场: {trade.exit_time.strftime('%Y-%m-%d %H:%M')} {trade.exit_price:.2f}")
                     self.log_backtest(f"  盈亏: {trade.pnl:.2f} ({trade.pnl_percent:.2%})")
                     self.log_backtest(f"  持仓: {trade.duration}天")
                     self.log_backtest(f"  信号强度: {trade.signal_strength:.2f}")
