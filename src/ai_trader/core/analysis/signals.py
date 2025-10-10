@@ -199,14 +199,15 @@ class SignalDetector:
         volume_conf = self.get_volume_confirmation()
         bullish_patterns = self.patterns.get_bullish_patterns()
         
-        # 综合入场条件（需要满足多个条件）
-        entry_signals = (
-            (trend == 1) &  # 上涨趋势
-            (macd_bullish | rsi_bullish | kdj_bullish) &  # 至少一个指标确认
-            (bb_bullish | breakout_up) &  # 布林带或突破信号
-            (volume_conf) &  # 成交量确认
-            (bullish_patterns)  # K线形态确认
-        )
+        # 综合入场条件（进一步放宽条件）
+        # 基础条件：趋势向上 或 至少一个技术指标看涨
+        basic_condition = (trend == 1) | (macd_bullish | rsi_bullish | kdj_bullish)
+        
+        # 确认条件：布林带、突破信号或K线形态任一
+        confirmation_condition = (bb_bullish | breakout_up | bullish_patterns)
+        
+        # 最终信号：基础条件 且 确认条件
+        entry_signals = basic_condition & confirmation_condition
         
         return entry_signals
     

@@ -118,7 +118,7 @@ class BacktestEngine:
                 duration = (current_time - current_position['entry_time']).days
                 
                 # 获取信号强度
-                signal_strength = self.signal_detector.get_signal_strength(entry_signals).iloc[i]
+                signal_strength = self.signal_detector.get_signal_strength(entry_signals).iloc[i] if i < len(self.signal_detector.get_signal_strength(entry_signals)) else 0.5
                 
                 # 创建交易记录
                 trade = Trade(

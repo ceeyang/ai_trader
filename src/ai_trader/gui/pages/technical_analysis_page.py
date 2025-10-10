@@ -10,9 +10,13 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import threading
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 from ...core.data.providers.binance import BinanceDataSource
 from ...core.analysis import TechnicalIndicators, CandlestickPatterns, SignalDetector, BacktestEngine
+from ...core.analysis.charting import TradingChart
 
 
 class TechnicalAnalysisPage:
@@ -31,6 +35,9 @@ class TechnicalAnalysisPage:
         self.indicators: Optional[TechnicalIndicators] = None
         self.patterns: Optional[CandlestickPatterns] = None
         self.signal_detector: Optional[SignalDetector] = None
+        self.trading_chart: Optional[TradingChart] = None
+        self.current_fig: Optional[Figure] = None
+        self.canvas: Optional[FigureCanvasTkAgg] = None
         
         # 配置样式
         self.configure_styles()
@@ -487,6 +494,42 @@ class TechnicalAnalysisPage:
         self.backtest_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         backtest_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S), pady=5)
         
+        # 图表显示选项卡
+        chart_tab = ttk.Frame(notebook)
+        notebook.add(chart_tab, text="图表分析")
+        chart_tab.columnconfigure(0, weight=1)
+        chart_tab.rowconfigure(1, weight=1)
+        
+        # 图表控制按钮
+        chart_control_frame = ttk.Frame(chart_tab)
+        chart_control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # 显示K线图按钮
+        self.show_candlestick_btn = ttk.Button(chart_control_frame, text="显示K线图", 
+                                            command=self.show_candlestick_chart)
+        self.show_candlestick_btn.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        
+        # 显示技术指标按钮
+        self.show_indicators_btn = ttk.Button(chart_control_frame, text="显示技术指标", 
+                                            command=self.show_indicators_chart)
+        self.show_indicators_btn.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        
+        # 显示信号图按钮
+        self.show_signals_btn = ttk.Button(chart_control_frame, text="显示交易信号", 
+                                         command=self.show_signals_chart)
+        self.show_signals_btn.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+        
+        # 保存图表按钮
+        self.save_chart_btn = ttk.Button(chart_control_frame, text="保存图表", 
+                                       command=self.save_chart)
+        self.save_chart_btn.grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+        
+        # 图表显示区域
+        self.chart_frame = ttk.Frame(chart_tab)
+        self.chart_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.chart_frame.columnconfigure(0, weight=1)
+        self.chart_frame.rowconfigure(0, weight=1)
+        
         # 按钮区域
         button_frame = ttk.Frame(results_frame)
         button_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
@@ -563,6 +606,7 @@ class TechnicalAnalysisPage:
                     self.indicators = TechnicalIndicators(self.historical_data)
                     self.patterns = CandlestickPatterns(self.historical_data)
                     self.signal_detector = SignalDetector(self.historical_data)
+                    self.trading_chart = TradingChart(self.historical_data)
                     
                     self.log_result(f"成功加载 {self.symbol_var.get()} 历史数据")
                     self.log_result(f"时间范围: {self.historical_data.index[0].strftime('%Y-%m-%d')} 到 {self.historical_data.index[-1].strftime('%Y-%m-%d')}")
@@ -808,8 +852,26 @@ class TechnicalAnalysisPage:
             initial_capital = float(self.initial_capital.get())
             backtest_engine = BacktestEngine(self.historical_data, initial_capital)
             
+            # 获取自定义信号
+            signal_detector = self.create_custom_signal_detector()
+            entry_signals = signal_detector.get_comprehensive_entry_signals()
+            exit_signals = signal_detector.get_comprehensive_exit_signals()
+            
+            # 设置回测参数
+            position_size = float(self.position_size.get())
+            commission_rate = float(self.commission_rate.get())
+            slippage_rate = float(self.slippage_rate.get())
+            
+            # 更新回测引擎参数
+            backtest_engine.commission_rate = commission_rate
+            backtest_engine.slippage_rate = slippage_rate
+            
             # 运行回测
-            result = backtest_engine.run_backtest()
+            result = backtest_engine.run_backtest(
+                entry_signals=entry_signals,
+                exit_signals=exit_signals,
+                position_size=position_size
+            )
             
             # 显示结果到分析结果选项卡
             self.log_result(f"\n=== 回测结果 ===")
@@ -1123,3 +1185,167 @@ class TechnicalAnalysisPage:
         self.slippage_rate.set("0.0005")
         
         self.log_result("参数已重置为默认值")
+    
+    def show_candlestick_chart(self) -> None:
+        """显示K线图"""
+        if self.historical_data is None:
+            messagebox.showerror("错误", "请先加载历史数据")
+            return
+        
+        try:
+            # 清除之前的图表
+            self.clear_chart()
+            
+            # 创建K线图
+            fig = self.trading_chart.plot_with_signals(
+                entry_signals=pd.Series(False, index=self.historical_data.index),
+                exit_signals=pd.Series(False, index=self.historical_data.index),
+                symbol=self.symbol_var.get()
+            )
+            
+            # 在GUI中显示图表
+            self.display_chart(fig)
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"显示K线图失败: {str(e)}")
+    
+    def show_indicators_chart(self) -> None:
+        """显示技术指标图"""
+        if self.historical_data is None:
+            messagebox.showerror("错误", "请先加载历史数据")
+            return
+        
+        try:
+            # 清除之前的图表
+            self.clear_chart()
+            
+            # 计算技术指标
+            indicators = self.get_indicators_data()
+            
+            # 创建技术指标图
+            fig = self.trading_chart.plot_indicators_only(
+                indicators=indicators,
+                symbol=self.symbol_var.get()
+            )
+            
+            # 在GUI中显示图表
+            self.display_chart(fig)
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"显示技术指标图失败: {str(e)}")
+    
+    def show_signals_chart(self) -> None:
+        """显示带交易信号的图表"""
+        if self.historical_data is None:
+            messagebox.showerror("错误", "请先加载历史数据")
+            return
+        
+        try:
+            # 清除之前的图表
+            self.clear_chart()
+            
+            # 获取交易信号
+            signal_detector = self.create_custom_signal_detector()
+            entry_signals = signal_detector.get_comprehensive_entry_signals()
+            exit_signals = signal_detector.get_comprehensive_exit_signals()
+            
+            # 计算技术指标
+            indicators = self.get_indicators_data()
+            
+            # 创建带信号的图表
+            fig = self.trading_chart.plot_with_signals(
+                entry_signals=entry_signals,
+                exit_signals=exit_signals,
+                indicators=indicators,
+                symbol=self.symbol_var.get()
+            )
+            
+            # 在GUI中显示图表
+            self.display_chart(fig)
+            
+            # 显示信号统计
+            stats = self.trading_chart.get_signal_statistics(entry_signals, exit_signals)
+            self.log_result(f"\n=== 图表信号统计 ===")
+            self.log_result(f"入场信号: {stats['total_entry_signals']} 个")
+            self.log_result(f"出场信号: {stats['total_exit_signals']} 个")
+            self.log_result(f"入场频率: {stats['entry_frequency']:.2%}")
+            self.log_result(f"出场频率: {stats['exit_frequency']:.2%}")
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"显示交易信号图失败: {str(e)}")
+    
+    def get_indicators_data(self) -> Dict[str, pd.Series]:
+        """获取技术指标数据"""
+        indicators = {}
+        
+        try:
+            # 移动平均线
+            sma_periods = [int(x.strip()) for x in self.sma_periods.get().split(',')]
+            for period in sma_periods:
+                if period <= len(self.historical_data):
+                    indicators[f'sma_{period}'] = self.indicators.sma(period)
+            
+            # MACD
+            macd_dif, macd_dea, macd_hist = self.indicators.macd(
+                fast_period=int(self.macd_fast.get()),
+                slow_period=int(self.macd_slow.get()),
+                signal_period=int(self.macd_signal.get())
+            )
+            indicators['macd_dif'] = macd_dif
+            indicators['macd_dea'] = macd_dea
+            indicators['macd_hist'] = macd_hist
+            
+            # RSI
+            indicators['rsi'] = self.indicators.rsi(int(self.rsi_period.get()))
+            
+            # 布林带
+            bb_upper, bb_middle, bb_lower = self.indicators.bollinger_bands(
+                period=int(self.bb_period.get()),
+                std_dev=float(self.bb_std_dev.get())
+            )
+            indicators['bb_upper'] = bb_upper
+            indicators['bb_middle'] = bb_middle
+            indicators['bb_lower'] = bb_lower
+            
+        except Exception as e:
+            self.log_result(f"计算技术指标失败: {str(e)}")
+        
+        return indicators
+    
+    def display_chart(self, fig: Figure) -> None:
+        """在GUI中显示图表"""
+        # 清除之前的图表
+        self.clear_chart()
+        
+        # 创建新的画布
+        self.current_fig = fig
+        self.canvas = FigureCanvasTkAgg(fig, self.chart_frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    
+    def clear_chart(self) -> None:
+        """清除图表"""
+        if self.canvas is not None:
+            self.canvas.get_tk_widget().destroy()
+            self.canvas = None
+        if self.current_fig is not None:
+            plt.close(self.current_fig)
+            self.current_fig = None
+    
+    def save_chart(self) -> None:
+        """保存图表到文件"""
+        if self.current_fig is None:
+            messagebox.showwarning("警告", "没有可保存的图表")
+            return
+        
+        try:
+            from tkinter import filedialog
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".png",
+                filetypes=[("PNG图片", "*.png"), ("PDF文件", "*.pdf"), ("所有文件", "*.*")]
+            )
+            if filename:
+                self.current_fig.savefig(filename, dpi=300, bbox_inches='tight')
+                self.log_result(f"图表已保存到: {filename}")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存图表失败: {str(e)}")
