@@ -44,55 +44,43 @@ class TechnicalAnalysisPage:
         main_frame = ttk.Frame(self.parent)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # 配置主框架网格
+        # 配置主框架网格 - 上下布局
         main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=2)
-        main_frame.rowconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)  # 上侧控制面板
+        main_frame.rowconfigure(1, weight=2)  # 下侧结果显示区域
         
-        # 左侧控制面板
-        left_panel = ttk.Frame(main_frame)
-        left_panel.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
-        left_panel.columnconfigure(0, weight=1)
+        # 上侧控制面板
+        top_panel = ttk.Frame(main_frame)
+        top_panel.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        top_panel.columnconfigure(0, weight=1)
+        top_panel.columnconfigure(1, weight=1)
+        top_panel.columnconfigure(2, weight=1)
+        top_panel.columnconfigure(3, weight=1)
         
-        # 右侧结果显示区域
-        right_panel = ttk.Frame(main_frame)
-        right_panel.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
-        right_panel.columnconfigure(0, weight=1)
-        right_panel.rowconfigure(0, weight=1)
+        # 下侧结果显示区域
+        bottom_panel = ttk.Frame(main_frame)
+        bottom_panel.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        bottom_panel.columnconfigure(0, weight=1)
+        bottom_panel.rowconfigure(0, weight=1)
         
-        # 创建滚动区域用于左侧面板
-        left_canvas = tk.Canvas(left_panel)
-        left_scrollbar = ttk.Scrollbar(left_panel, orient="vertical", command=left_canvas.yview)
-        left_scrollable_frame = ttk.Frame(left_canvas)
+        # 在上侧面板创建控制区域
+        self.create_data_section(top_panel)
+        self.create_indicators_section(top_panel)
+        self.create_patterns_section(top_panel)
+        self.create_signals_section(top_panel)
+        self.create_backtest_section(top_panel)
         
-        left_scrollable_frame.bind(
-            "<Configure>",
-            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all"))
-        )
-        
-        left_canvas.create_window((0, 0), window=left_scrollable_frame, anchor="nw")
-        left_canvas.configure(yscrollcommand=left_scrollbar.set)
-        
-        # 在左侧面板创建控制区域
-        self.create_data_section(left_scrollable_frame)
-        self.create_indicators_section(left_scrollable_frame)
-        self.create_patterns_section(left_scrollable_frame)
-        self.create_signals_section(left_scrollable_frame)
-        self.create_backtest_section(left_scrollable_frame)
-        
-        # 在右侧面板创建结果显示区域
-        self.create_results_section(right_panel)
-        
-        # 布局左侧滚动区域
-        left_canvas.pack(side="left", fill="both", expand=True)
-        left_scrollbar.pack(side="right", fill="y")
+        # 在下侧面板创建结果显示区域
+        self.create_results_section(bottom_panel)
     
     def create_data_section(self, parent: ttk.Frame) -> None:
         """创建数据获取区域"""
         # 数据获取框架
         data_frame = ttk.LabelFrame(parent, text="数据获取", padding=10)
-        data_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        data_frame.grid(row=0, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=5)
         data_frame.columnconfigure(1, weight=1)
+        data_frame.columnconfigure(3, weight=1)
+        data_frame.columnconfigure(5, weight=1)
         
         # 币种选择
         ttk.Label(data_frame, text="交易对:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
@@ -124,20 +112,20 @@ class TechnicalAnalysisPage:
         end_date_entry.grid(row=1, column=4, sticky=tk.W, padx=(0, 10), pady=(10, 0))
         
         # 时间周期
-        ttk.Label(data_frame, text="时间周期:").grid(row=2, column=0, sticky=tk.W, padx=(0, 5), pady=(10, 0))
+        ttk.Label(data_frame, text="时间周期:").grid(row=1, column=5, sticky=tk.W, padx=(0, 5), pady=(10, 0))
         self.interval_var = tk.StringVar(value="1d")
         interval_combo = ttk.Combobox(data_frame, textvariable=self.interval_var, 
                                      values=["1m", "5m", "15m", "1h", "4h", "1d"], 
                                      state="readonly", width=8)
-        interval_combo.grid(row=2, column=1, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        interval_combo.grid(row=1, column=6, sticky=tk.W, padx=(0, 10), pady=(10, 0))
         
         # 获取数据按钮
         self.load_data_btn = ttk.Button(data_frame, text="获取数据", command=self.load_historical_data)
-        self.load_data_btn.grid(row=2, column=2, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+        self.load_data_btn.grid(row=2, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
         
         # 数据状态标签
         self.data_status_label = ttk.Label(data_frame, text="未加载数据", foreground="red")
-        self.data_status_label.grid(row=2, column=3, sticky=tk.W, padx=(10, 0), pady=(10, 0))
+        self.data_status_label.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=(10, 0))
         
         # 加载币种列表
         self.load_symbols()
@@ -238,7 +226,7 @@ class TechnicalAnalysisPage:
         """创建K线形态区域"""
         # K线形态框架
         patterns_frame = ttk.LabelFrame(parent, text="K线形态识别", padding=10)
-        patterns_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        patterns_frame.grid(row=1, column=2, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # 单根K线形态
         single_frame = ttk.Frame(patterns_frame)
@@ -298,7 +286,7 @@ class TechnicalAnalysisPage:
         """创建信号检测区域"""
         # 信号检测框架
         signals_frame = ttk.LabelFrame(parent, text="交易信号设置", padding=10)
-        signals_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        signals_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # 入场信号设置
         entry_frame = ttk.Frame(signals_frame)
@@ -377,7 +365,7 @@ class TechnicalAnalysisPage:
         """创建回测分析区域"""
         # 回测框架
         backtest_frame = ttk.LabelFrame(parent, text="回测设置", padding=10)
-        backtest_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        backtest_frame.grid(row=2, column=2, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         # 初始资金
         ttk.Label(backtest_frame, text="初始资金:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
