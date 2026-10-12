@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ai_trader.web.api import market
+from ai_trader.web.api import dca, market
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -37,6 +37,7 @@ def create_app(dist_dir: Optional[Path] = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(market.router)
+    app.include_router(dca.router)
 
     static_dir = DEFAULT_DIST_DIR if dist_dir is None else dist_dir
     if static_dir.is_dir():
