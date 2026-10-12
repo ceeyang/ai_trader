@@ -16,7 +16,9 @@ def test_analysis_matches_signal_config(client, fake_data_source, sample_ohlcv):
 
     r = client.post("/api/analysis/run", json={**BODY, "signals": {"combination": "min", "min_conditions": 2}})
     expected = SignalDetector(sample_ohlcv).get_custom_entry_signals(SignalConfig(combination="min", min_conditions=2))
-    assert r.json()["entry_signals"] == [int(t.timestamp()) for t in sample_ohlcv.index[expected]]
+    from ai_trader.web.services.market_data import to_unix_seconds
+
+    assert r.json()["entry_signals"] == [to_unix_seconds(t) for t in sample_ohlcv.index[expected]]
 
 
 def test_analysis_empty_range_422(client, fake_data_source):

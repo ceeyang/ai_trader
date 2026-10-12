@@ -1,14 +1,27 @@
+import { useEffect, useState } from "react";
 import type { IndicatorParams } from "../../api/types";
 import { Group, NumberField } from "./Group";
 
+function parsePeriods(text: string): number[] {
+  return text.split(",").map((s) => Number(s.trim())).filter((n) => Number.isInteger(n) && n > 0);
+}
+
 export function IndicatorGroup({ value, onChange }: { value: IndicatorParams; onChange: (v: IndicatorParams) => void }) {
   const set = (patch: Partial<IndicatorParams>) => onChange({ ...value, ...patch });
+  const [smaText, setSmaText] = useState(value.sma_periods.join(","));
+  useEffect(() => setSmaText(value.sma_periods.join(",")), [value.sma_periods]);
+  const commitSma = () => {
+    const periods = parsePeriods(smaText);
+    setSmaText(periods.join(","));
+    if (periods.join(",") !== value.sma_periods.join(",")) set({ sma_periods: periods });
+  };
   return (
     <Group title="技术指标" defaultOpen={false}>
       <label className="flex items-center justify-between gap-2 text-sm">
         <span className="text-slate-600">均线周期 (逗号分隔)</span>
-        <input value={value.sma_periods.join(",")} className="w-32 rounded border border-slate-300 px-2 py-0.5 text-right"
-          onChange={(e) => set({ sma_periods: e.target.value.split(",").map((s) => Number(s.trim())).filter((n) => n > 0) })} />
+        <input value={smaText} className="w-32 rounded border border-slate-300 px-2 py-0.5 text-right"
+          onChange={(e) => setSmaText(e.target.value)} onBlur={commitSma}
+          onKeyDown={(e) => { if (e.key === "Enter") commitSma(); }} />
       </label>
       <NumberField label="MACD 快线" value={value.macd_fast} onChange={(v) => set({ macd_fast: v })} />
       <NumberField label="MACD 慢线" value={value.macd_slow} onChange={(v) => set({ macd_slow: v })} />

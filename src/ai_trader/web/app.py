@@ -50,9 +50,15 @@ def create_app(dist_dir: Optional[Path] = None) -> FastAPI:
             """真实文件直接返回；其余路径（前端路由）回退到 index.html；/api/* 不回退。"""
             if path.startswith("api/") or path == "api":
                 raise HTTPException(status_code=404)
-            candidate = (static_dir / path).resolve() if path else index_file
-            if candidate.is_file() and str(candidate).startswith(str(static_dir)):
+            if not path:
+                return FileResponse(index_file)
+            candidate = (static_dir / path).resolve()
+            if not candidate.is_relative_to(static_dir):
+                raise HTTPException(status_code=404)
+            if candidate.is_file():
                 return FileResponse(candidate)
+            if Path(path).suffix:  # 像文件的路径（/assets/x.js、/favicon.ico）缺失时 404，不回退
+                raise HTTPException(status_code=404)
             return FileResponse(index_file)
 
     return app

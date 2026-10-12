@@ -9,11 +9,11 @@ from ai_trader.core.analysis.indicators import TechnicalIndicators
 from ai_trader.core.analysis.patterns import CandlestickPatterns
 from ai_trader.core.analysis.signals import SignalConfig, SignalDetector
 from ai_trader.web.schemas import AnalysisRequest, AnalysisResponse, EffectivenessStat, IndicatorParams
-from ai_trader.web.services.market_data import fetch_klines, nan_to_none
+from ai_trader.web.services.market_data import fetch_klines, nan_to_none, to_unix_seconds
 
 
 def _true_times(series: pd.Series) -> List[int]:
-    return [int(ts.timestamp()) for ts in series.index[series.astype(bool)]]
+    return [to_unix_seconds(ts) for ts in series.index[series.astype(bool)]]
 
 
 def compute_indicators(df: pd.DataFrame, params: IndicatorParams) -> Dict[str, List[Optional[float]]]:

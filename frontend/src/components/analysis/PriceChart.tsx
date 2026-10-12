@@ -6,7 +6,10 @@ import {
   createChart,
   createSeriesMarkers,
   type IChartApi,
+  type ISeriesApi,
+  type ISeriesMarkersPluginApi,
   type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
@@ -19,6 +22,7 @@ const PANES: { name: string; keys: string[] }[] = [
   { name: "KDJ", keys: ["kdj_k", "kdj_d", "kdj_j"] },
 ];
 const COLORS = ["#2563eb", "#d97706", "#7c3aed", "#059669", "#dc2626", "#0891b2", "#9333ea"];
+const NONE: number[] = [];
 
 function lineData(bars: Bar[], values: (number | null)[]) {
   const out: { time: UTCTimestamp; value: number }[] = [];
@@ -35,10 +39,18 @@ export interface PriceChartProps {
   exit?: number[];
 }
 
-export function PriceChart({ bars, indicators, entry = [], exit = [] }: PriceChartProps) {
-  const container = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
+interface ChartState {
+  chart: IChartApi;
+  candles: ISeriesApi<"Candlestick">;
+  overlays: ISeriesApi<"Line">[];
+  markers: ISeriesMarkersPluginApi<Time> | null;
+}
 
+export function PriceChart({ bars, indicators, entry = NONE, exit = NONE }: PriceChartProps) {
+  const container = useRef<HTMLDivElement>(null);
+  const state = useRef<ChartState | null>(null);
+
+  // 创建：只随 bars 变化重建图表
   useEffect(() => {
     if (!container.current) return;
     const chart = createChart(container.current, {
@@ -47,41 +59,15 @@ export function PriceChart({ bars, indicators, entry = [], exit = [] }: PriceCha
       grid: { vertLines: { color: "#f1f5f9" }, horzLines: { color: "#f1f5f9" } },
       timeScale: { timeVisible: true, secondsVisible: false },
     });
-    chartRef.current = chart;
-
     const candles = chart.addSeries(CandlestickSeries, {
       upColor: "#16a34a", downColor: "#dc2626", borderVisible: false, wickUpColor: "#16a34a", wickDownColor: "#dc2626",
     });
     candles.setData(bars.map((b) => ({ time: b.time as UTCTimestamp, open: b.open, high: b.high, low: b.low, close: b.close })));
-
     const volume = chart.addSeries(HistogramSeries, { priceScaleId: "volume", priceFormat: { type: "volume" } });
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     volume.setData(bars.map((b) => ({ time: b.time as UTCTimestamp, value: b.volume, color: b.close >= b.open ? "#86efac" : "#fca5a5" })));
-
-    let colorIdx = 0;
-    const nextColor = () => COLORS[colorIdx++ % COLORS.length];
-    if (indicators) {
-      for (const key of Object.keys(indicators)) {
-        if (OVERLAY_PREFIXES.some((p) => key.startsWith(p))) {
-          chart.addSeries(LineSeries, { color: nextColor(), lineWidth: 1, title: key, priceLineVisible: false, lastValueVisible: false })
-            .setData(lineData(bars, indicators[key]));
-        }
-      }
-      PANES.forEach((pane, i) => {
-        const present = pane.keys.filter((k) => indicators[k]);
-        present.forEach((k) => {
-          chart.addSeries(LineSeries, { color: nextColor(), lineWidth: 1, title: k, priceLineVisible: false, lastValueVisible: false }, i + 1)
-            .setData(lineData(bars, indicators[k]));
-        });
-      });
-    }
-
-    const markers: SeriesMarker<UTCTimestamp>[] = [
-      ...entry.map((t) => ({ time: t as UTCTimestamp, position: "belowBar" as const, color: "#16a34a", shape: "arrowUp" as const, text: "入" })),
-      ...exit.map((t) => ({ time: t as UTCTimestamp, position: "aboveBar" as const, color: "#dc2626", shape: "arrowDown" as const, text: "出" })),
-    ].sort((a, b) => a.time - b.time);
-    createSeriesMarkers(candles, markers);
     chart.timeScale().fitContent();
+    state.current = { chart, candles, overlays: [], markers: null };
 
     const onResize = () => container.current && chart.applyOptions({ width: container.current.clientWidth });
     onResize();
@@ -89,8 +75,39 @@ export function PriceChart({ bars, indicators, entry = [], exit = [] }: PriceCha
     return () => {
       window.removeEventListener("resize", onResize);
       chart.remove();
-      chartRef.current = null;
+      state.current = null;
     };
+  }, [bars]);
+
+  // 更新：指标与信号变化时只增删序列，不重建图表
+  useEffect(() => {
+    const s = state.current;
+    if (!s) return;
+    s.overlays.forEach((series) => s.chart.removeSeries(series));
+    s.overlays = [];
+    let colorIdx = 0;
+    const nextColor = () => COLORS[colorIdx++ % COLORS.length];
+    const add = (key: string, pane?: number) => {
+      const series = s.chart.addSeries(
+        LineSeries,
+        { color: nextColor(), lineWidth: 1, title: key, priceLineVisible: false, lastValueVisible: false },
+        pane,
+      );
+      series.setData(lineData(bars, indicators![key]));
+      s.overlays.push(series);
+    };
+    if (indicators) {
+      Object.keys(indicators).filter((k) => OVERLAY_PREFIXES.some((p) => k.startsWith(p))).forEach((k) => add(k));
+      PANES.forEach((pane, i) => pane.keys.filter((k) => indicators[k]).forEach((k) => add(k, i + 1)));
+      const panes = s.chart.panes();
+      if (panes.length > 1) panes[0].setStretchFactor(3);
+    }
+    const markers: SeriesMarker<Time>[] = [
+      ...entry.map((t) => ({ time: t as UTCTimestamp, position: "belowBar" as const, color: "#16a34a", shape: "arrowUp" as const, text: "入" })),
+      ...exit.map((t) => ({ time: t as UTCTimestamp, position: "aboveBar" as const, color: "#dc2626", shape: "arrowDown" as const, text: "出" })),
+    ].sort((a, b) => (a.time as number) - (b.time as number));
+    if (s.markers) s.markers.setMarkers(markers);
+    else s.markers = createSeriesMarkers(s.candles, markers);
   }, [bars, indicators, entry, exit]);
 
   return <div ref={container} className="w-full" data-testid="price-chart" />;

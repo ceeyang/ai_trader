@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ai_trader.core.analysis.signals import SignalConfig
 
@@ -60,21 +60,28 @@ class DCAResponse(BaseModel):
 
 # ---- 技术分析 ----
 class IndicatorParams(BaseModel):
-    sma_periods: List[int] = [5, 10, 20, 50, 200]
-    macd_fast: int = 12
-    macd_slow: int = 26
-    macd_signal: int = 9
-    rsi_period: int = 14
-    kdj_k: int = 9
-    kdj_d: int = 3
-    kdj_j: int = 3
-    bb_period: int = 20
-    bb_std: float = 2.0
+    sma_periods: List[int] = Field(default=[5, 10, 20, 50, 200])
+    macd_fast: int = Field(default=12, ge=1)
+    macd_slow: int = Field(default=26, ge=1)
+    macd_signal: int = Field(default=9, ge=1)
+    rsi_period: int = Field(default=14, ge=1)
+    kdj_k: int = Field(default=9, ge=1)
+    kdj_d: int = Field(default=3, ge=1)
+    kdj_j: int = Field(default=3, ge=1)
+    bb_period: int = Field(default=20, ge=1)
+    bb_std: float = Field(default=2.0, gt=0)
+
+    @field_validator("sma_periods")
+    @classmethod
+    def _periods_positive(cls, v: List[int]) -> List[int]:
+        if any(p < 1 for p in v):
+            raise ValueError("sma_periods must all be >= 1")
+        return v
 
 
 class SignalParams(BaseModel):
-    rsi_oversold: int = 30
-    rsi_overbought: int = 70
+    rsi_oversold: int = Field(default=30, ge=0, le=100)
+    rsi_overbought: int = Field(default=70, ge=0, le=100)
     trend_required: bool = True
     macd_required: bool = True
     rsi_required: bool = True
@@ -83,7 +90,7 @@ class SignalParams(BaseModel):
     pattern_required: bool = True
     volume_required: bool = True
     combination: Literal["all", "min"] = "all"
-    min_conditions: int = 2
+    min_conditions: int = Field(default=2, ge=1)
 
     def to_config(self) -> SignalConfig:
         return SignalConfig(**self.model_dump())
@@ -118,10 +125,10 @@ class AnalysisResponse(BaseModel):
 
 # ---- 回测 ----
 class BacktestParams(BaseModel):
-    initial_capital: float = 100000
-    position_size: float = 0.1
-    commission_rate: float = 0.001
-    slippage_rate: float = 0.0005
+    initial_capital: float = Field(default=100000, gt=0)
+    position_size: float = Field(default=0.1, gt=0, le=1)
+    commission_rate: float = Field(default=0.001, ge=0)
+    slippage_rate: float = Field(default=0.0005, ge=0)
 
 
 class BacktestRequest(AnalysisRequest):

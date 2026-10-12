@@ -21,7 +21,7 @@ def test_df_to_bars_time_is_unix_seconds(sample_ohlcv):
     from ai_trader.web.services.market_data import df_to_bars
 
     bars = df_to_bars(sample_ohlcv.head(1))
-    assert bars[0].time == int(sample_ohlcv.index[0].timestamp())
+    assert bars[0].time == int(sample_ohlcv.index[0].to_pydatetime().timestamp())
     assert bars[0].close == float(sample_ohlcv["close"].iloc[0])
 
 

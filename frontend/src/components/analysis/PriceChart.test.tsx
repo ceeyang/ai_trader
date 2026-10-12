@@ -16,6 +16,8 @@ vi.mock("lightweight-charts", () => ({
     addSeries: mocks.addSeries,
     timeScale: () => ({ subscribeVisibleLogicalRangeChange: vi.fn(), setVisibleLogicalRange: vi.fn(), fitContent: vi.fn() }),
     remove: vi.fn(),
+    removeSeries: vi.fn(),
+    panes: () => [{ setStretchFactor: vi.fn() }, { setStretchFactor: vi.fn() }],
     applyOptions: vi.fn(),
     priceScale: () => ({ applyOptions: vi.fn() }),
   })),

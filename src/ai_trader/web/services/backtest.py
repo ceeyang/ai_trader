@@ -6,7 +6,7 @@ from typing import Optional
 from ai_trader.core.analysis.backtest import BacktestEngine, BacktestResult
 from ai_trader.core.analysis.signals import SignalDetector
 from ai_trader.web.schemas import BacktestRequest, BacktestResponse, TradeOut
-from ai_trader.web.services.market_data import fetch_klines
+from ai_trader.web.services.market_data import fetch_klines, to_unix_seconds
 
 
 def _num(value: object) -> Optional[float]:
@@ -27,8 +27,8 @@ def _to_response(result: BacktestResult) -> BacktestResponse:
         avg_trade_duration=_num(result.avg_trade_duration),
         trades=[
             TradeOut(
-                entry_time=int(t.entry_time.timestamp()),
-                exit_time=int(t.exit_time.timestamp()),
+                entry_time=to_unix_seconds(t.entry_time),
+                exit_time=to_unix_seconds(t.exit_time),
                 entry_price=float(t.entry_price),
                 exit_price=float(t.exit_price),
                 quantity=float(t.quantity),
