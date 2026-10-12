@@ -1,9 +1,11 @@
 """Pydantic 请求/响应模型（全部 snake_case）。"""
 
 from datetime import date
-from typing import List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+from ai_trader.core.analysis.signals import SignalConfig
 
 
 class Bar(BaseModel):
@@ -54,3 +56,61 @@ class DCAResponse(BaseModel):
     average_cost: float
     investment_count: int
     records: List[DCARecord]
+
+
+# ---- 技术分析 ----
+class IndicatorParams(BaseModel):
+    sma_periods: List[int] = [5, 10, 20, 50, 200]
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    rsi_period: int = 14
+    kdj_k: int = 9
+    kdj_d: int = 3
+    kdj_j: int = 3
+    bb_period: int = 20
+    bb_std: float = 2.0
+
+
+class SignalParams(BaseModel):
+    rsi_oversold: int = 30
+    rsi_overbought: int = 70
+    trend_required: bool = True
+    macd_required: bool = True
+    rsi_required: bool = True
+    kdj_required: bool = True
+    bb_required: bool = True
+    pattern_required: bool = True
+    volume_required: bool = True
+    combination: Literal["all", "min"] = "all"
+    min_conditions: int = 2
+
+    def to_config(self) -> SignalConfig:
+        return SignalConfig(**self.model_dump())
+
+
+class DataRange(BaseModel):
+    symbol: str
+    interval: str
+    start: date
+    end: date
+
+
+class AnalysisRequest(BaseModel):
+    data: DataRange
+    indicators: IndicatorParams = IndicatorParams()
+    signals: SignalParams = SignalParams()
+
+
+class EffectivenessStat(BaseModel):
+    frequency: float
+    avg_price_change_1d: float
+    positive_rate: float
+
+
+class AnalysisResponse(BaseModel):
+    indicators: Dict[str, List[Optional[float]]]
+    patterns: Dict[str, List[int]]
+    entry_signals: List[int]
+    exit_signals: List[int]
+    effectiveness: Dict[str, EffectivenessStat]
