@@ -3,9 +3,12 @@
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from ai_trader.web.api import market
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIST_DIR = REPO_ROOT / "frontend" / "dist"
@@ -21,9 +24,19 @@ def create_app(dist_dir: Optional[Path] = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.exception_handler(ConnectionError)
+    async def _connection_error(_: Request, exc: ConnectionError) -> JSONResponse:
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+    @app.exception_handler(ValueError)
+    async def _value_error(_: Request, exc: ValueError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
     @app.get("/api/health")
     def health() -> dict:
         return {"status": "ok"}
+
+    app.include_router(market.router)
 
     static_dir = DEFAULT_DIST_DIR if dist_dir is None else dist_dir
     if static_dir.is_dir():
