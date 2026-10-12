@@ -114,3 +114,40 @@ class AnalysisResponse(BaseModel):
     entry_signals: List[int]
     exit_signals: List[int]
     effectiveness: Dict[str, EffectivenessStat]
+
+
+# ---- 回测 ----
+class BacktestParams(BaseModel):
+    initial_capital: float = 100000
+    position_size: float = 0.1
+    commission_rate: float = 0.001
+    slippage_rate: float = 0.0005
+
+
+class BacktestRequest(AnalysisRequest):
+    backtest: BacktestParams = BacktestParams()
+
+
+class TradeOut(BaseModel):
+    entry_time: int
+    exit_time: int
+    entry_price: float
+    exit_price: float
+    quantity: float
+    pnl: float
+    pnl_percent: float
+    duration: int
+    signal_strength: float
+
+
+class BacktestResponse(BaseModel):
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: Optional[float]
+    total_pnl: float
+    total_return: float
+    max_drawdown: float
+    sharpe_ratio: Optional[float]
+    avg_trade_duration: Optional[float]
+    trades: List[TradeOut]
