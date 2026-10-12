@@ -3,10 +3,9 @@
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
 from ai_trader.web.api import analysis, backtest, config, dca, market
 
@@ -42,9 +41,20 @@ def create_app(dist_dir: Optional[Path] = None) -> FastAPI:
     app.include_router(backtest.router)
     app.include_router(config.router)
 
-    static_dir = DEFAULT_DIST_DIR if dist_dir is None else dist_dir
+    static_dir = (DEFAULT_DIST_DIR if dist_dir is None else dist_dir).resolve()
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="frontend")
+        index_file = static_dir / "index.html"
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def spa(path: str) -> FileResponse:
+            """真实文件直接返回；其余路径（前端路由）回退到 index.html；/api/* 不回退。"""
+            if path.startswith("api/") or path == "api":
+                raise HTTPException(status_code=404)
+            candidate = (static_dir / path).resolve() if path else index_file
+            if candidate.is_file() and str(candidate).startswith(str(static_dir)):
+                return FileResponse(candidate)
+            return FileResponse(index_file)
+
     return app
 
 

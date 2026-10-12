@@ -1,5 +1,8 @@
 # 快速启动指南
 
+> **推荐使用网页版**：`uv sync --group dev` → `cd frontend && npm install && npm run build` → `uv run ai-trader-web` → 打开 http://127.0.0.1:8000/ 。详见 README「网页版（推荐）」。下文为旧版桌面/CLI 说明。
+
+
 ## 问题已修复！✅
 
 模块导入错误已经解决，现在可以正常使用应用程序了。

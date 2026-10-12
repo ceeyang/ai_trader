@@ -57,6 +57,42 @@ pip install -r requirements.txt
 
 ## 快速开始
 
+### 网页版（推荐）
+
+后端 FastAPI，前端 React。需要 [uv](https://docs.astral.sh/uv/) 和 Node 20+。
+
+```bash
+# 1. Python 环境
+uv sync --group dev
+
+# 2. 构建前端
+cd frontend && npm install && npm run build && cd ..
+
+# 3. 启动（单进程，托管前端 + API）
+uv run ai-trader-web
+# 浏览器打开 http://127.0.0.1:8000/
+```
+
+开发模式（前端热更新，/api 自动代理到 8000）：
+
+```bash
+uv run ai-trader-web            # 终端 1
+cd frontend && npm run dev      # 终端 2，打开 http://localhost:5173
+```
+
+测试：
+
+```bash
+uv run pytest -q                                   # 后端
+cd frontend && npm test && npm run test:e2e        # 前端单测 + Playwright
+```
+
+API 文档：启动后访问 http://127.0.0.1:8000/docs 。分析参数预设保存在 `data/analysis_config.json`（可用环境变量 `AI_TRADER_DATA_DIR` 改目录）。
+
+### 桌面版（旧版，Tkinter）
+
+以下为旧的 Tkinter 桌面入口，功能已被网页版覆盖，仅保留兼容：
+
 ### 1. 安装依赖
 
 ```bash
