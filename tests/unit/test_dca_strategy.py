@@ -45,8 +45,7 @@ class TestDCAStrategy:
         expected_size = self.invest_amount / 50000.0
         assert position_size == expected_size
     
-    @patch('src.ai_trader.strategies.dca.dca_strategy.BinanceDataSource')
-    def test_execute_dca_success(self, mock_data_source_class):
+    def test_execute_dca_success(self):
         """测试定投执行成功"""
         # 模拟数据源
         mock_data_source = Mock()
@@ -64,7 +63,7 @@ class TestDCAStrategy:
                 'close': 55000.0
             }
         ]
-        mock_data_source_class.return_value = mock_data_source
+        self.strategy.data_source = mock_data_source
         
         # 执行定投
         result = self.strategy.execute_dca()
@@ -83,7 +82,7 @@ class TestDCAStrategy:
         # 模拟数据源连接失败
         mock_data_source = Mock()
         mock_data_source.connect.return_value = False
-        mock_data_source_class.return_value = mock_data_source
+        self.strategy.data_source = mock_data_source
         
         # 执行定投应该抛出异常
         with pytest.raises(ConnectionError):

@@ -67,7 +67,7 @@ target/
 .ipynb_checkpoints
 
 # pyenv
-.python-version
+# .python-version is committed (uv pin)
 
 # celery beat schedule file
 celerybeat-schedule
@@ -128,3 +128,11 @@ backup/
 *.backup
 
 CLEANUP_SUMMARY
+# uv / web version
+.venv/
+.superpowers/
+data/
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
