@@ -15,7 +15,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from ...core.data.providers.binance import BinanceDataSource
-from ...core.analysis import TechnicalIndicators, CandlestickPatterns, SignalDetector, BacktestEngine
+from ...core.analysis import TechnicalIndicators, CandlestickPatterns, SignalDetector, SignalConfig, BacktestEngine
 from ...core.analysis.charting import TradingChart
 
 
@@ -674,138 +674,31 @@ class TechnicalAnalysisPage:
         finally:
             self.analyze_btn.config(state="normal", text="开始分析")
     
+    def build_signal_config(self) -> SignalConfig:
+        """从界面变量构造 SignalConfig"""
+        return SignalConfig(
+            rsi_oversold=int(self.rsi_oversold.get()),
+            rsi_overbought=int(self.rsi_overbought.get()),
+            trend_required=self.trend_required.get(),
+            macd_required=self.macd_required.get(),
+            rsi_required=self.rsi_required.get(),
+            kdj_required=self.kdj_required.get(),
+            bb_required=self.bb_required.get(),
+            pattern_required=self.pattern_required.get(),
+            volume_required=self.volume_required.get(),
+            combination=self.signal_combination.get(),
+            min_conditions=int(self.min_conditions.get()),
+        )
+
     def create_custom_signal_detector(self) -> SignalDetector:
-        """创建自定义信号检测器"""
-        # 创建自定义的信号检测器，使用用户设置的参数
-        class CustomSignalDetector(SignalDetector):
-            def __init__(self, data, parent_detector):
-                super().__init__(data)
-                self.parent_detector = parent_detector
-            
-            def get_custom_entry_signals(self):
-                """获取自定义入场信号"""
-                # 获取各种信号
-                trend = self.get_trend_direction()
-                macd_bullish, _ = self.get_macd_signals()
-                rsi_bullish, _ = self.get_rsi_signals(
-                    oversold=int(self.parent_detector.rsi_oversold.get()),
-                    overbought=int(self.parent_detector.rsi_overbought.get())
-                )
-                kdj_bullish, _ = self.get_kdj_signals()
-                bb_bullish, _ = self.get_bollinger_signals()
-                breakout_up, _ = self.get_breakout_signals()
-                volume_conf = self.get_volume_confirmation()
-                
-                # 获取K线形态
-                patterns = CandlestickPatterns(self.data)
-                bullish_patterns = patterns.get_bullish_patterns()
-                
-                # 根据用户设置组合信号
-                entry_conditions = []
-                
-                if self.parent_detector.trend_required.get():
-                    entry_conditions.append(trend == 1)
-                
-                if self.parent_detector.macd_required.get():
-                    entry_conditions.append(macd_bullish)
-                
-                if self.parent_detector.rsi_required.get():
-                    entry_conditions.append(rsi_bullish)
-                
-                if self.parent_detector.kdj_required.get():
-                    entry_conditions.append(kdj_bullish)
-                
-                if self.parent_detector.bb_required.get():
-                    entry_conditions.append(bb_bullish)
-                
-                if self.parent_detector.pattern_required.get():
-                    entry_conditions.append(bullish_patterns)
-                
-                if self.parent_detector.volume_required.get():
-                    entry_conditions.append(volume_conf)
-                
-                # 根据用户设置组合条件
-                if entry_conditions:
-                    combination_mode = self.parent_detector.signal_combination.get()
-                    min_conditions = int(self.parent_detector.min_conditions.get())
-                    
-                    if combination_mode == "all":
-                        # 需要满足所有条件
-                        combined_signals = entry_conditions[0]
-                        for condition in entry_conditions[1:]:
-                            combined_signals = combined_signals & condition
-                        return combined_signals
-                    else:
-                        # 需要满足最少条件数量
-                        if len(entry_conditions) >= min_conditions:
-                            # 计算每个时间点满足的条件数量
-                            condition_count = pd.Series(0, index=self.data.index)
-                            for condition in entry_conditions:
-                                condition_count += condition.astype(int)
-                            
-                            # 满足最少条件数量的信号
-                            return condition_count >= min_conditions
-                        else:
-                            return pd.Series(False, index=self.data.index)
-                else:
-                    return pd.Series(False, index=self.data.index)
-            
-            def get_custom_exit_signals(self):
-                """获取自定义出场信号"""
-                # 获取各种信号
-                trend = self.get_trend_direction()
-                _, macd_bearish = self.get_macd_signals()
-                _, rsi_bearish = self.get_rsi_signals(
-                    oversold=int(self.parent_detector.rsi_oversold.get()),
-                    overbought=int(self.parent_detector.rsi_overbought.get())
-                )
-                _, kdj_bearish = self.get_kdj_signals()
-                _, bb_bearish = self.get_bollinger_signals()
-                _, breakout_down = self.get_breakout_signals()
-                
-                # 获取K线形态
-                patterns = CandlestickPatterns(self.data)
-                bearish_patterns = patterns.get_bearish_patterns()
-                
-                # 根据用户设置组合信号（满足任一条件即可出场）
-                exit_conditions = []
-                
-                if self.parent_detector.trend_required.get():
-                    exit_conditions.append(trend == -1)
-                
-                if self.parent_detector.macd_required.get():
-                    exit_conditions.append(macd_bearish)
-                
-                if self.parent_detector.rsi_required.get():
-                    exit_conditions.append(rsi_bearish)
-                
-                if self.parent_detector.kdj_required.get():
-                    exit_conditions.append(kdj_bearish)
-                
-                if self.parent_detector.bb_required.get():
-                    exit_conditions.append(bb_bearish)
-                
-                if self.parent_detector.pattern_required.get():
-                    exit_conditions.append(bearish_patterns)
-                
-                # 组合条件（满足任一条件即可）
-                if exit_conditions:
-                    combined_signals = exit_conditions[0]
-                    for condition in exit_conditions[1:]:
-                        combined_signals = combined_signals | condition
-                    return combined_signals
-                else:
-                    return pd.Series(False, index=self.data.index)
-        
-        # 创建自定义检测器
-        custom_detector = CustomSignalDetector(self.historical_data, self)
-        
-        # 重写方法
-        custom_detector.get_comprehensive_entry_signals = custom_detector.get_custom_entry_signals
-        custom_detector.get_comprehensive_exit_signals = custom_detector.get_custom_exit_signals
-        
-        return custom_detector
+        """创建使用界面参数的信号检测器"""
+        config = self.build_signal_config()
+        detector = SignalDetector(self.historical_data)
+        detector.get_comprehensive_entry_signals = lambda: detector.get_custom_entry_signals(config)  # type: ignore[method-assign]
+        detector.get_comprehensive_exit_signals = lambda: detector.get_custom_exit_signals(config)  # type: ignore[method-assign]
+        return detector
     
+
     def analyze_signal_effectiveness(self, signal_detector: SignalDetector) -> None:
         """分析信号有效性"""
         try:

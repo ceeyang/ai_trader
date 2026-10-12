@@ -5,12 +5,13 @@
 
 from .indicators import TechnicalIndicators
 from .patterns import CandlestickPatterns
-from .signals import SignalDetector
+from .signals import SignalDetector, SignalConfig
 from .backtest import BacktestEngine
 
 __all__ = [
     'TechnicalIndicators',
     'CandlestickPatterns', 
     'SignalDetector',
+    'SignalConfig',
     'BacktestEngine'
 ]

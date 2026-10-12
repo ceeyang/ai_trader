@@ -5,9 +5,27 @@
 
 import pandas as pd
 import numpy as np
+from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Any
 from .indicators import TechnicalIndicators
 from .patterns import CandlestickPatterns
+
+
+@dataclass
+class SignalConfig:
+    """自定义信号组合参数（与 Tkinter 技术分析页的可调项一一对应）。"""
+
+    rsi_oversold: int = 30
+    rsi_overbought: int = 70
+    trend_required: bool = True
+    macd_required: bool = True
+    rsi_required: bool = True
+    kdj_required: bool = True
+    bb_required: bool = True
+    pattern_required: bool = True
+    volume_required: bool = True
+    combination: str = "all"  # "all" | "min"
+    min_conditions: int = 2
 
 
 class SignalDetector:
@@ -240,6 +258,82 @@ class SignalDetector:
         
         return exit_signals
     
+    def get_custom_entry_signals(self, config: SignalConfig) -> pd.Series:
+        """按 SignalConfig 组合入场信号（逻辑与旧 Tkinter 内部类一致）。"""
+        trend = self.get_trend_direction()
+        macd_bullish, _ = self.get_macd_signals()
+        rsi_bullish, _ = self.get_rsi_signals(
+            oversold=config.rsi_oversold, overbought=config.rsi_overbought
+        )
+        kdj_bullish, _ = self.get_kdj_signals()
+        bb_bullish, _ = self.get_bollinger_signals()
+        volume_conf = self.get_volume_confirmation()
+        bullish_patterns = CandlestickPatterns(self.data).get_bullish_patterns()
+
+        entry_conditions: List[pd.Series] = []
+        if config.trend_required:
+            entry_conditions.append(trend == 1)
+        if config.macd_required:
+            entry_conditions.append(macd_bullish)
+        if config.rsi_required:
+            entry_conditions.append(rsi_bullish)
+        if config.kdj_required:
+            entry_conditions.append(kdj_bullish)
+        if config.bb_required:
+            entry_conditions.append(bb_bullish)
+        if config.pattern_required:
+            entry_conditions.append(bullish_patterns)
+        if config.volume_required:
+            entry_conditions.append(volume_conf)
+
+        if not entry_conditions:
+            return pd.Series(False, index=self.data.index)
+
+        if config.combination == "all":
+            combined = entry_conditions[0]
+            for condition in entry_conditions[1:]:
+                combined = combined & condition
+            return combined
+
+        if len(entry_conditions) < config.min_conditions:
+            return pd.Series(False, index=self.data.index)
+        condition_count = pd.Series(0, index=self.data.index)
+        for condition in entry_conditions:
+            condition_count += condition.astype(int)
+        return condition_count >= config.min_conditions
+
+    def get_custom_exit_signals(self, config: SignalConfig) -> pd.Series:
+        """按 SignalConfig 组合出场信号：启用条件任一满足即出场。"""
+        trend = self.get_trend_direction()
+        _, macd_bearish = self.get_macd_signals()
+        _, rsi_bearish = self.get_rsi_signals(
+            oversold=config.rsi_oversold, overbought=config.rsi_overbought
+        )
+        _, kdj_bearish = self.get_kdj_signals()
+        _, bb_bearish = self.get_bollinger_signals()
+        bearish_patterns = CandlestickPatterns(self.data).get_bearish_patterns()
+
+        exit_conditions: List[pd.Series] = []
+        if config.trend_required:
+            exit_conditions.append(trend == -1)
+        if config.macd_required:
+            exit_conditions.append(macd_bearish)
+        if config.rsi_required:
+            exit_conditions.append(rsi_bearish)
+        if config.kdj_required:
+            exit_conditions.append(kdj_bearish)
+        if config.bb_required:
+            exit_conditions.append(bb_bearish)
+        if config.pattern_required:
+            exit_conditions.append(bearish_patterns)
+
+        if not exit_conditions:
+            return pd.Series(False, index=self.data.index)
+        combined = exit_conditions[0]
+        for condition in exit_conditions[1:]:
+            combined = combined | condition
+        return combined
+
     def get_signal_strength(self, signals: pd.Series) -> pd.Series:
         """
         计算信号强度
