@@ -151,3 +151,10 @@ class BacktestResponse(BaseModel):
     sharpe_ratio: Optional[float]
     avg_trade_duration: Optional[float]
     trades: List[TradeOut]
+
+
+# ---- 参数预设 ----
+class AnalysisPreset(BaseModel):
+    indicators: IndicatorParams = IndicatorParams()
+    signals: SignalParams = SignalParams()
+    backtest: BacktestParams = BacktestParams()
