@@ -41,7 +41,16 @@ test("shows error when backend is down", async ({ page }) => {
 test("dca page calculates", async ({ page }) => {
   await mockApi(page);
   await page.route("**/api/dca/calculate", (r) =>
-    r.fulfill({ json: { symbol: "BTCUSDT", total_invested: 400, total_coins: 0.01, current_price: 50000, total_value: 500, profit: 100, profit_rate: 25, average_cost: 40000, investment_count: 2, records: [{ date: "2024-01-10", price: 40000, amount: 200, coins: 0.005 }] } }),
+    r.fulfill({
+      json: {
+        frequency: "monthly", amount: 200, start_date: "2024-01-01", end_date: "2024-03-31", investment_count: 2,
+        total_invested: 400, total_value: 500, profit: 100, profit_rate: 25,
+        legs: [{ symbol: "BTCUSDT", weight: 1, total_invested: 400, total_coins: 0.01, current_price: 50000, total_value: 500, profit: 100, profit_rate: 25, average_cost: 40000, investment_count: 2,
+          records: [{ date: "2024-01-10", price: 40000, amount: 200, coins: 0.005 }, { date: "2024-02-10", price: 40000, amount: 200, coins: 0.005 }] }],
+        records: [{ date: "2024-01-10", amount: 200 }, { date: "2024-02-10", amount: 200 }],
+        symbol: "BTCUSDT", total_coins: 0.01, current_price: 50000, average_cost: 40000,
+      },
+    }),
   );
   await page.goto("/dca");
   await page.getByRole("button", { name: "计算收益" }).click();

@@ -21,7 +21,7 @@ describe("api client", () => {
   it("posts JSON bodies with content-type", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ symbols: [] }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await api.calculateDca({ symbol: "BTCUSDT", amount: 1, day: 1, start_date: "2024-01-01", end_date: null });
+    await api.calculateDca({ frequency: "monthly", day: 1, amount: 1, start_date: "2024-01-01", end_date: null, allocations: [{ symbol: "BTCUSDT", weight: 1 }] });
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/dca/calculate");
     expect(init.method).toBe("POST");

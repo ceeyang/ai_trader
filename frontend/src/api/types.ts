@@ -18,12 +18,18 @@ export interface IntervalsResponse {
   intervals: string[];
 }
 
-export interface DCARequest {
+export type DCAFrequency = "daily" | "monthly";
+export interface AllocationIn {
   symbol: string;
-  amount: number;
+  weight: number;
+}
+export interface DCARequest {
+  frequency: DCAFrequency;
   day: number;
+  amount: number;
   start_date: string;
   end_date: string | null;
+  allocations: AllocationIn[];
 }
 export interface DCARecord {
   date: string;
@@ -31,8 +37,9 @@ export interface DCARecord {
   amount: number;
   coins: number;
 }
-export interface DCAResponse {
+export interface DCALeg {
   symbol: string;
+  weight: number;
   total_invested: number;
   total_coins: number;
   current_price: number;
@@ -42,6 +49,27 @@ export interface DCAResponse {
   average_cost: number;
   investment_count: number;
   records: DCARecord[];
+}
+export interface DCAPeriod {
+  date: string;
+  amount: number;
+}
+export interface DCAResponse {
+  frequency: DCAFrequency;
+  amount: number;
+  start_date: string;
+  end_date: string;
+  investment_count: number;
+  total_invested: number;
+  total_value: number;
+  profit: number;
+  profit_rate: number;
+  legs: DCALeg[];
+  records: DCAPeriod[];
+  symbol?: string | null;
+  total_coins?: number | null;
+  current_price?: number | null;
+  average_cost?: number | null;
 }
 
 export interface IndicatorParams {
