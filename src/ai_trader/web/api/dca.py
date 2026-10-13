@@ -20,6 +20,7 @@ def _run(req: DCARequest) -> DCAResponse:
         end=datetime.combine(req.end_date, time.min) if req.end_date else datetime.now(),
         allocations=[Allocation(a.symbol, a.weight) for a in req.allocations],
         invest_day=req.day,
+        invest_hour=req.hour,
     )
     result = run_dca_plan(plan, market_data.ensure_connected())
     if len(result["legs"]) == 1:

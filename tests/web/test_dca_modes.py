@@ -33,3 +33,18 @@ def test_bad_weights_422(client, fake_data_source):
 
 def test_missing_symbol_and_allocations_422(client, fake_data_source):
     assert client.post("/api/dca/calculate", json={**BASE, "frequency": "daily"}).status_code == 422
+
+
+def test_hour_is_passed_through_and_echoed(client, fake_data_source):
+    r = client.post("/api/dca/calculate", json={**BASE, "frequency": "daily", "hour": 20, "allocations": [{"symbol": "BTCUSDT", "weight": 1}]})
+    assert r.status_code == 200 and r.json()["invest_hour"] == 20
+    assert r.json()["investment_count"] == 91
+
+
+def test_no_hour_echoes_null(client, fake_data_source):
+    r = client.post("/api/dca/calculate", json={**BASE, "frequency": "daily", "allocations": [{"symbol": "BTCUSDT", "weight": 1}]})
+    assert r.status_code == 200 and r.json()["invest_hour"] is None
+
+
+def test_hour_out_of_range_422(client, fake_data_source):
+    assert client.post("/api/dca/calculate", json={**BASE, "frequency": "daily", "hour": 24, "allocations": [{"symbol": "BTCUSDT", "weight": 1}]}).status_code == 422

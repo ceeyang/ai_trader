@@ -37,6 +37,7 @@ def sample_ohlcv() -> pd.DataFrame:
 
 def _install_fake(monkeypatch: pytest.MonkeyPatch, df: pd.DataFrame) -> None:
     cls = binance_module.BinanceDataSource
+    hourly = make_sample_ohlcv(n=len(df) * 24, seed=7, start=str(df.index[0].date()), freq="h")
 
     def connect(self: Any) -> bool:
         self.is_connected = True
@@ -48,7 +49,8 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, df: pd.DataFrame) -> None:
     def get_historical_data(
         self: Any, symbol: str, interval: str, start_time: datetime, end_time: datetime
     ) -> pd.DataFrame:
-        return df.loc[(df.index >= start_time) & (df.index <= end_time)].copy()
+        src = hourly if interval == "1h" else df
+        return src.loc[(src.index >= start_time) & (src.index <= end_time)].copy()
 
     def get_available_symbols(self: Any, mainstream_only: bool = True) -> List[str]:
         return ["BTCUSDT", "ETHUSDT"]

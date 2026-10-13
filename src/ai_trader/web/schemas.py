@@ -40,6 +40,7 @@ class DCARequest(BaseModel):
 
     frequency: Literal["daily", "monthly"] = "monthly"
     day: int = Field(default=10, ge=1, le=31)
+    hour: Optional[int] = Field(default=None, ge=0, le=23)  # 北京时间小时；None = 日线收盘价
     amount: float = Field(gt=0)
     start_date: date
     end_date: Optional[date] = None
@@ -83,6 +84,7 @@ class DCAPeriod(BaseModel):
 
 class DCAResponse(BaseModel):
     frequency: str
+    invest_hour: Optional[int] = None
     amount: float
     start_date: str
     end_date: str
