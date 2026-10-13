@@ -4,6 +4,7 @@
 基于币安API的数据源实现，重构原有代码。
 """
 
+import os
 import requests
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
@@ -14,6 +15,8 @@ from .base import BaseDataSource
 
 
 class BinanceDataSource(BaseDataSource):
+    DEFAULT_BASE_URL = "https://api.binance.com/api/v3"
+
     """
     币安数据源
     
@@ -29,8 +32,14 @@ class BinanceDataSource(BaseDataSource):
         """
         super().__init__("Binance", config)
         
-        # API端点配置
-        self.base_url = "https://api.binance.com/api/v3"
+        # API端点配置：config['base_url'] > 环境变量 BINANCE_BASE_URL > 默认
+        # 某些网络封锁 api.binance.com 时可改用官方公开行情域名
+        # https://data-api.binance.vision/api/v3（只读行情，接口与主站一致）
+        self.base_url = str(
+            self.config.get("base_url")
+            or os.environ.get("BINANCE_BASE_URL")
+            or self.DEFAULT_BASE_URL
+        ).rstrip("/")
         self.klines_url = f"{self.base_url}/klines"
         self.ticker_url = f"{self.base_url}/ticker/price"
         self.exchange_info_url = f"{self.base_url}/exchangeInfo"

@@ -87,6 +87,14 @@ uv run pytest -q                                   # 后端
 cd frontend && npm test && npm run test:e2e        # 前端单测 + Playwright
 ```
 
+**币安被封锁的网络**：如果 `api.binance.com` 连不上（DNS 被劫持到内网地址或超时），可改用币安官方的只读行情域名：
+
+```bash
+BINANCE_BASE_URL=https://data-api.binance.vision/api/v3 uv run ai-trader-web
+```
+
+也可以在代码里给 `BinanceDataSource({"base_url": ...})` 传配置。优先级：配置 > 环境变量 > 默认主站。
+
 API 文档：启动后访问 http://127.0.0.1:8000/docs 。分析参数预设保存在 `data/analysis_config.json`（可用环境变量 `AI_TRADER_DATA_DIR` 改目录）。
 
 ### 桌面版（旧版，Tkinter）

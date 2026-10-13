@@ -131,7 +131,7 @@ CLEANUP_SUMMARY
 # uv / web version
 .venv/
 .superpowers/
-data/
+/data/
 frontend/node_modules/
 frontend/dist/
 frontend/test-results/
