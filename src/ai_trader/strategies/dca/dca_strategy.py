@@ -10,6 +10,7 @@ import pandas as pd
 
 from ...core.base.strategy import BaseStrategy
 from ...core.data.providers import BinanceDataSource
+from .plan import Allocation, DCAPlan, run_dca_plan
 
 
 class DCAStrategy(BaseStrategy):
@@ -78,65 +79,44 @@ class DCAStrategy(BaseStrategy):
     
     def execute_dca(self) -> Dict[str, Any]:
         """
-        执行定投策略
-        
+        执行定投策略（单币种、每月；内部委托给 run_dca_plan，按区间取数）
+
         Returns:
             定投结果
         """
         if not self.data_source.connect():
             raise ConnectionError("无法连接到数据源")
-        
+
         try:
-            # 获取定投日期的价格数据
-            investment_data = self.data_source.get_dca_investment_dates(
-                self.symbol, self.start_date, self.end_date, self.invest_day
+            plan = DCAPlan(
+                frequency="monthly",
+                amount=self.invest_amount,
+                start=self.start_date,
+                end=self.end_date,
+                allocations=[Allocation(self.symbol, 1.0)],
+                invest_day=self.invest_day,
             )
-            
-            if not investment_data:
-                raise ValueError("未找到符合条件的定投日期数据")
-            
-            # 计算定投收益
-            self.total_coins = 0.0
-            self.total_invested = 0.0
-            self.investment_records = []
-            
-            for record in investment_data:
-                coins_bought = self.invest_amount / record['close']
-                self.total_coins += coins_bought
-                self.total_invested += self.invest_amount
-                
-                self.investment_records.append({
-                    'date': record['date'],
-                    'price': record['close'],
-                    'amount': self.invest_amount,
-                    'coins': coins_bought,
-                })
-            
-            # 获取当前价格
-            current_price = self.data_source.get_current_price(self.symbol)
-            
-            # 计算收益
-            total_value = self.total_coins * current_price
-            profit = total_value - self.total_invested
-            profit_rate = (profit / self.total_invested * 100) if self.total_invested > 0 else 0
-            average_cost = self.total_invested / self.total_coins if self.total_coins > 0 else 0
-            
+            result = run_dca_plan(plan, self.data_source)
+            leg = result["legs"][0]
+            self.investment_records = leg["records"]
+            self.total_coins = leg["total_coins"]
+            self.total_invested = leg["total_invested"]
             return {
                 'symbol': self.symbol,
-                'total_invested': self.total_invested,
-                'total_coins': self.total_coins,
-                'current_price': current_price,
-                'total_value': total_value,
-                'profit': profit,
-                'profit_rate': profit_rate,
-                'average_cost': average_cost,
-                'investment_count': len(self.investment_records),
-                'records': self.investment_records,
+                'total_invested': leg["total_invested"],
+                'total_coins': leg["total_coins"],
+                'current_price': leg["current_price"],
+                'total_value': leg["total_value"],
+                'profit': leg["profit"],
+                'profit_rate': leg["profit_rate"],
+                'average_cost': leg["average_cost"],
+                'investment_count': leg["investment_count"],
+                'records': leg["records"],
             }
-            
+
         finally:
             self.data_source.disconnect()
-    
+
     def get_investment_summary(self) -> Dict[str, Any]:
         """
         获取投资摘要

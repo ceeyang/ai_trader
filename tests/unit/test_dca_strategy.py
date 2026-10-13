@@ -51,18 +51,13 @@ class TestDCAStrategy:
         mock_data_source = Mock()
         mock_data_source.connect.return_value = True
         mock_data_source.get_current_price.return_value = 60000.0
-        mock_data_source.get_dca_investment_dates.return_value = [
-            {
-                'date': '2024-01-10',
-                'datetime': datetime(2024, 1, 10),
-                'close': 50000.0
-            },
-            {
-                'date': '2024-02-10',
-                'datetime': datetime(2024, 2, 10),
-                'close': 55000.0
-            }
-        ]
+        import pandas as pd
+        frame = pd.DataFrame(
+            {"open": [50000.0, 55000.0], "high": [50000.0, 55000.0], "low": [50000.0, 55000.0],
+             "close": [50000.0, 55000.0], "volume": [1.0, 1.0]},
+            index=pd.to_datetime(["2024-01-10", "2024-02-10"]),
+        )
+        mock_data_source.get_historical_data.return_value = frame
         self.strategy.data_source = mock_data_source
         
         # 执行定投

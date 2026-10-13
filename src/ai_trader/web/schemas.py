@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai_trader.core.analysis.signals import SignalConfig
 
@@ -30,12 +30,29 @@ class IntervalsResponse(BaseModel):
 
 
 # ---- DCA ----
-class DCARequest(BaseModel):
+class AllocationIn(BaseModel):
     symbol: str
+    weight: float = Field(gt=0)
+
+
+class DCARequest(BaseModel):
+    """新格式：frequency + allocations；兼容旧格式：symbol（单币种、每月）。"""
+
+    frequency: Literal["daily", "monthly"] = "monthly"
+    day: int = Field(default=10, ge=1, le=31)
     amount: float = Field(gt=0)
-    day: int = Field(ge=1, le=31)
     start_date: date
     end_date: Optional[date] = None
+    symbol: Optional[str] = None
+    allocations: List[AllocationIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _fill_allocations(self) -> "DCARequest":
+        if not self.allocations:
+            if not self.symbol:
+                raise ValueError("either allocations or symbol is required")
+            self.allocations = [AllocationIn(symbol=self.symbol, weight=1.0)]
+        return self
 
 
 class DCARecord(BaseModel):
@@ -45,8 +62,9 @@ class DCARecord(BaseModel):
     coins: float
 
 
-class DCAResponse(BaseModel):
+class DCALeg(BaseModel):
     symbol: str
+    weight: float
     total_invested: float
     total_coins: float
     current_price: float
@@ -56,6 +74,30 @@ class DCAResponse(BaseModel):
     average_cost: float
     investment_count: int
     records: List[DCARecord]
+
+
+class DCAPeriod(BaseModel):
+    date: str
+    amount: float
+
+
+class DCAResponse(BaseModel):
+    frequency: str
+    amount: float
+    start_date: str
+    end_date: str
+    investment_count: int
+    total_invested: float
+    total_value: float
+    profit: float
+    profit_rate: float
+    legs: List[DCALeg]
+    records: List[DCAPeriod]
+    # 单币种时保留的旧字段（多币种为 None）
+    symbol: Optional[str] = None
+    total_coins: Optional[float] = None
+    current_price: Optional[float] = None
+    average_cost: Optional[float] = None
 
 
 # ---- 技术分析 ----
