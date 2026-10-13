@@ -15,6 +15,7 @@ const RESULT: DCAResponse = {
   frequency: "monthly", amount: 200, start_date: "2024-01-01", end_date: "2024-03-31", investment_count: 2,
   total_invested: 400, total_value: 500, profit: 100, profit_rate: 25, legs: [LEG],
   records: [{ date: "2024-01-10", amount: 200 }, { date: "2024-02-10", amount: 200 }],
+  invest_hour: null,
   symbol: "BTCUSDT", total_coins: 0.01, current_price: 50000, average_cost: 40000,
 };
 
@@ -32,6 +33,24 @@ describe("DcaPage", () => {
     expect(await screen.findByText("25.00%")).toBeInTheDocument();
     expect(screen.getByText("2024-01-10")).toBeInTheDocument();
     expect(calc.mock.calls[0][0]).toMatchObject({ frequency: "monthly", day: 10, amount: 200, allocations: [{ symbol: "BTCUSDT", weight: 1 }] });
+  });
+
+  it("defaults to daily-close pricing (hour null) and can send a Beijing-time hour", async () => {
+    const calc = setup();
+    await screen.findByRole("button", { name: "计算收益" });
+    await userEvent.click(screen.getByRole("button", { name: "计算收益" }));
+    expect(calc.mock.calls[0][0]).toMatchObject({ hour: null });
+    await userEvent.selectOptions(screen.getByLabelText("定投时间 (北京时间)"), "20");
+    await userEvent.click(screen.getByRole("button", { name: "计算收益" }));
+    expect(calc.mock.calls[1][0]).toMatchObject({ hour: 20 });
+  });
+
+  it("shows the invest time in the summary", async () => {
+    vi.spyOn(api, "getSymbols").mockResolvedValue({ symbols: ["BTCUSDT"] });
+    vi.spyOn(api, "calculateDca").mockResolvedValue({ ...RESULT, invest_hour: 20 });
+    render(<Providers><DcaPage /></Providers>);
+    await userEvent.click(await screen.findByRole("button", { name: "计算收益" }));
+    expect(await screen.findByText("20:00 (北京时间)")).toBeInTheDocument();
   });
 
   it("daily frequency hides the day-of-month field and is sent", async () => {

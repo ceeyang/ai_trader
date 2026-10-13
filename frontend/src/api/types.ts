@@ -26,6 +26,7 @@ export interface AllocationIn {
 export interface DCARequest {
   frequency: DCAFrequency;
   day: number;
+  hour: number | null; // 北京时间小时；null = 日线收盘价
   amount: number;
   start_date: string;
   end_date: string | null;
@@ -56,6 +57,7 @@ export interface DCAPeriod {
 }
 export interface DCAResponse {
   frequency: DCAFrequency;
+  invest_hour: number | null;
   amount: number;
   start_date: string;
   end_date: string;

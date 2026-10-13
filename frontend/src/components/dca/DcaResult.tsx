@@ -16,6 +16,7 @@ export function DcaResult({ data }: { data: DCAResponse }) {
   const portfolio = data.legs.length > 1;
   const summary: [string, string][] = [
     ["频率", FREQ_LABEL[data.frequency]],
+    ["定投时间", data.invest_hour == null ? "日线收盘价" : `${String(data.invest_hour).padStart(2, "0")}:00 (北京时间)`],
     ["投资期数", String(data.investment_count)],
     ["总投入", `${fmt.num(data.total_invested)} USDT`],
     ["当前总价值", `${fmt.num(data.total_value)} USDT`],

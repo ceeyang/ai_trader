@@ -43,7 +43,7 @@ test("dca page calculates", async ({ page }) => {
   await page.route("**/api/dca/calculate", (r) =>
     r.fulfill({
       json: {
-        frequency: "monthly", amount: 200, start_date: "2024-01-01", end_date: "2024-03-31", investment_count: 2,
+        frequency: "monthly", invest_hour: null, amount: 200, start_date: "2024-01-01", end_date: "2024-03-31", investment_count: 2,
         total_invested: 400, total_value: 500, profit: 100, profit_rate: 25,
         legs: [{ symbol: "BTCUSDT", weight: 1, total_invested: 400, total_coins: 0.01, current_price: 50000, total_value: 500, profit: 100, profit_rate: 25, average_cost: 40000, investment_count: 2,
           records: [{ date: "2024-01-10", price: 40000, amount: 200, coins: 0.005 }, { date: "2024-02-10", price: 40000, amount: 200, coins: 0.005 }] }],

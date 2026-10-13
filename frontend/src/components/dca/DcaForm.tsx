@@ -8,6 +8,7 @@ export function DcaForm({ onSubmit, loading }: { onSubmit: (req: DCARequest) => 
   const [mainstreamOnly, setMainstreamOnly] = useState(true);
   const [frequency, setFrequency] = useState<DCAFrequency>("monthly");
   const [day, setDay] = useState(10);
+  const [hour, setHour] = useState<number | null>(null);
   const [amount, setAmount] = useState(200);
   const [startDate, setStartDate] = useState(isoDaysAgo(365));
   const [endDate, setEndDate] = useState(isoDaysAgo(0));
@@ -26,7 +27,7 @@ export function DcaForm({ onSubmit, loading }: { onSubmit: (req: DCARequest) => 
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    onSubmit({ frequency, day, amount, start_date: startDate, end_date: endDate || null, allocations });
+    onSubmit({ frequency, day, hour, amount, start_date: startDate, end_date: endDate || null, allocations });
   }
 
   return (
@@ -50,6 +51,14 @@ export function DcaForm({ onSubmit, loading }: { onSubmit: (req: DCARequest) => 
             <Input type="number" min={1} max={31} value={day} onChange={(e) => setDay(Number(e.target.value))} />
           </Field>
         )}
+        <Field label="定投时间 (北京时间)">
+          <Select value={hour === null ? "" : String(hour)} onChange={(e) => setHour(e.target.value === "" ? null : Number(e.target.value))}>
+            <option value="">日线收盘价（默认）</option>
+            {Array.from({ length: 24 }, (_, h) => (
+              <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
+            ))}
+          </Select>
+        </Field>
         <Field label={allocations.length > 1 ? "每期总额 (USDT)" : "定投金额 (USDT)"}>
           <Input type="number" min={1} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
         </Field>
