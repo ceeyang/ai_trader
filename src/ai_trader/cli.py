@@ -274,6 +274,32 @@ def _print_tuning_params(s, effective_json: str | None) -> None:
     )
 
 
+def _print_paper_state(raw: str | None) -> None:
+    """Print the paper account as last persisted by the running process (kv `paper_state`)."""
+    import json
+    from decimal import Decimal
+
+    if raw is None:
+        print("positions: no persisted paper account yet (starts when `ai-trader run --mode paper` trades)")
+        return
+    snap = json.loads(raw)
+    print(f"paper account (persisted): wallet={snap['wallet_balance']} realized_pnl={snap['realized_pnl']} USDT")
+    positions = snap["positions"]
+    print("positions:" + ("" if positions else " (none)"))
+    for symbol, p in sorted(positions.items()):
+        qty = Decimal(p["qty"])
+        side = "LONG" if qty > 0 else "SHORT"
+        print(f"  {symbol:<10} {side:<5} qty={abs(qty)} entry={p['entry_price']}")
+    pending = snap["pending"]
+    print("open orders:" + ("" if pending else " (none)"))
+    for item in pending:
+        req = item["request"]
+        print(
+            f"  {req['symbol']:<10} {req['side']:<4} {req['type']:<20} stop={req['stop_price']} "
+            f"{req['client_order_id']}"
+        )
+
+
 async def _status() -> None:
     from ai_trader.exchange.binance.errors import BinanceError
     from ai_trader.exchange.binance.rest import BinanceFuturesRest
@@ -301,11 +327,12 @@ async def _status() -> None:
                 f"  {sig.created_at.strftime('%Y-%m-%d %H:%M:%S')}  {sig.detector:<18} {sig.symbol:<10} "
                 f"{sig.direction.value:<8} {sig.strength:.2f}"
             )
+        paper_state = await store.get_kv("paper_state") if s.mode == "paper" else None
     finally:
         await store.close()
 
     if s.mode == "paper":
-        print("positions: paper positions live in the running `ai-trader run` process (see its health log)")
+        _print_paper_state(paper_state)
         return
     key = s.binance_api_key.get_secret_value() if s.binance_api_key else None
     secret = s.binance_api_secret.get_secret_value() if s.binance_api_secret else None

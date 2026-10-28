@@ -522,6 +522,14 @@ class Store:
         rows = await cur.fetchall()
         return [_order_from_row(r) for r in rows]
 
+    async def symbols_with_open_protective_orders(self) -> list[str]:
+        cur = await self._conn.execute(
+            "SELECT DISTINCT symbol FROM orders WHERE role IN ('stop_loss','take_profit') "
+            "AND status IN ('NEW','PARTIALLY_FILLED') ORDER BY symbol"
+        )
+        rows = await cur.fetchall()
+        return [r["symbol"] for r in rows]
+
     async def update_order_status(
         self,
         client_order_id: str,

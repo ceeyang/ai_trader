@@ -176,7 +176,8 @@ async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, s
 
     broker: PaperBroker | BinanceFuturesBroker
     if settings.mode == "paper":
-        broker = PaperBroker(state, bus, exchange_info, initial_balance=PAPER_INITIAL_BALANCE)
+        # `store`: the simulated account survives restarts (kv `paper_state`).
+        broker = PaperBroker(state, bus, exchange_info, initial_balance=PAPER_INITIAL_BALANCE, store=store)
     else:
         broker = BinanceFuturesBroker(
             rest, exchange_info, bus, settings.effective_ws_url, ws_factory=ws_factory, kill=_kill

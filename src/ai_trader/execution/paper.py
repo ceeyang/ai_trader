@@ -14,8 +14,18 @@ submits publish the `Fill` and return the `OrderResult`.
 Positions are one-way (one signed quantity per symbol). `Fill.realized_pnl` follows
 Binance semantics: gross of commission. The wallet balance is credited the realized pnl
 and debited every commission, so `account().total_wallet_balance` is net of fees.
+
+Persistence (optional `store`): the whole simulated account — wallet balance, realized
+pnl, positions, resting protective orders and the order-id counter — is written as JSON
+to kv `paper_state` after every change (fill, pending add/remove, cancel), Decimals as
+strings, and restored on `start()`, so a restarted process carries on with the same
+account. On start the orders table is also reconciled: protective rows still open in the
+DB whose client_order_id is not among the restored resting orders are marked CANCELED.
+A failed state write is logged and does not fail the order operation; the next change
+writes the full state again.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -39,11 +49,14 @@ from ai_trader.models import (
     Side,
     new_client_order_id,
 )
+from ai_trader.storage.db import Store
 
 log = logging.getLogger(__name__)
 
 _TRIGGER_TYPES = {OrderType.STOP_MARKET, OrderType.TAKE_PROFIT_MARKET}
 _BPS = Decimal(10000)
+PAPER_STATE_KV_KEY = "paper_state"
+_STATE_VERSION = 1
 
 
 class PaperBrokerError(RuntimeError):
@@ -78,8 +91,11 @@ class PaperBroker:
         fee_rate: Decimal = Decimal("0.0004"),
         slippage_bps: int = 2,
         clock: Callable[[], float] = time.time,
+        store: Store | None = None,
     ) -> None:
         self._state = state
+        self._store = store
+        self._restored = False
         self._bus = bus
         self.exchange_info = exchange_info
         self._fee_rate = fee_rate
@@ -101,6 +117,9 @@ class PaperBroker:
     # ---- lifecycle --------------------------------------------------------
 
     async def start(self) -> None:
+        if self._store is not None and not self._restored:
+            self._restored = True
+            await self._restore()
         if not self._subscribed:
             self._bus.subscribe(MarkPrice, self._on_mark)
             self._subscribed = True
@@ -163,6 +182,7 @@ class PaperBroker:
         order_id = self._new_order_id()
         if req.type in _TRIGGER_TYPES:
             self._pending[req.client_order_id] = (req, order_id)
+            await self._persist()
             return self._result(req, order_id, OrderStatus.NEW)
         if req.type != OrderType.MARKET:
             raise PaperBrokerError(f"PaperBroker does not support {req.type.value} orders")
@@ -171,9 +191,11 @@ class PaperBroker:
             raise PaperBrokerError(f"no mark price for {req.symbol}")
         qty = self._fill_qty(req)
         if qty is None:
+            await self._persist()  # the order id was consumed
             return self._result(req, order_id, OrderStatus.REJECTED)
         price = self._fill_price(req.symbol, req.side, mark)
         self._execute(req, order_id, qty, price)
+        await self._persist()
         return self._result(req, order_id, OrderStatus.FILLED, executed_qty=qty, avg_price=price)
 
     async def cancel(self, symbol: str, client_order_id: str) -> OrderResult:
@@ -182,13 +204,17 @@ class PaperBroker:
         if entry is None or entry[0].symbol != symbol:
             raise PaperBrokerError(f"unknown open order {client_order_id} for {symbol}")
         del self._pending[client_order_id]
+        await self._persist()
         req, order_id = entry
         return self._result(req, order_id, OrderStatus.CANCELED)
 
     async def cancel_all(self, symbol: str) -> None:
         self.cancel_all_calls.append(symbol)
-        for cid in [c for c, (r, _) in self._pending.items() if r.symbol == symbol]:
+        cids = [c for c, (r, _) in self._pending.items() if r.symbol == symbol]
+        for cid in cids:
             del self._pending[cid]
+        if cids:
+            await self._persist()
 
     async def close_position(self, symbol: str) -> OrderResult | None:
         self.close_position_calls.append(symbol)
@@ -209,11 +235,13 @@ class PaperBroker:
 
     async def _on_mark(self, mp: MarkPrice) -> None:
         self._event_marks[mp.symbol] = mp.mark_price
+        changed = False
         for cid, (req, order_id) in list(self._pending.items()):
             if req.symbol != mp.symbol or not _triggered(req, mp.mark_price):
                 continue
             if self._pending.pop(cid, None) is None:  # canceled meanwhile
                 continue
+            changed = True
             qty = self._fill_qty(req)
             if qty is None:
                 log.info("paper %s %s triggered with no position to reduce; expired", req.type.value, cid)
@@ -224,6 +252,78 @@ class PaperBroker:
             self._bus.publish(
                 self._result(req, order_id, OrderStatus.FILLED, executed_qty=qty, avg_price=price)
             )
+        if changed:
+            await self._persist()
+
+    # ---- persistence ------------------------------------------------------
+
+    def _snapshot(self) -> dict:
+        return {
+            "version": _STATE_VERSION,
+            "wallet_balance": str(self.wallet_balance),
+            "realized_pnl": str(self.realized_pnl),
+            "next_order_id": self._next_order_id,
+            "positions": {
+                s: {"qty": str(p.qty), "entry_price": str(p.entry_price)}
+                for s, p in self._positions.items()
+                if p.qty != 0
+            },
+            "pending": [
+                {"order_id": oid, "request": req.model_dump(mode="json")}
+                for req, oid in self._pending.values()
+            ],
+        }
+
+    async def _persist(self) -> None:
+        if self._store is None:
+            return
+        payload = json.dumps(self._snapshot())  # taken now, before any await
+        try:
+            await self._store.set_kv(PAPER_STATE_KV_KEY, payload)
+        except Exception:
+            log.exception("paper broker: persisting state failed; the next change writes it again")
+
+    async def _restore(self) -> None:
+        assert self._store is not None
+        raw = await self._store.get_kv(PAPER_STATE_KV_KEY)
+        if raw is not None:
+            snap = json.loads(raw)
+            self.wallet_balance = Decimal(snap["wallet_balance"])
+            self.realized_pnl = Decimal(snap["realized_pnl"])
+            self._next_order_id = int(snap["next_order_id"])
+            self._positions = {
+                s: _Pos(qty=Decimal(p["qty"]), entry_price=Decimal(p["entry_price"]))
+                for s, p in snap["positions"].items()
+            }
+            self._pending = {}
+            for item in snap["pending"]:
+                req = OrderRequest.model_validate(item["request"])
+                self._pending[req.client_order_id] = (req, int(item["order_id"]))
+            log.info(
+                "paper broker: restored state (wallet=%s positions=%s resting_orders=%d)",
+                self.wallet_balance,
+                ",".join(f"{s}:{p.qty}" for s, p in self._positions.items()) or "none",
+                len(self._pending),
+            )
+        await self._reconcile_orders()
+
+    async def _reconcile_orders(self) -> None:
+        """Mark protective rows the DB still shows as open, but which no longer rest here, CANCELED."""
+        assert self._store is not None
+        for symbol in await self._store.symbols_with_open_protective_orders():
+            for rec in await self._store.open_protective_orders(symbol):
+                if rec.client_order_id in self._pending:
+                    continue
+                await self._store.update_order_status(
+                    rec.client_order_id,
+                    OrderStatus.CANCELED,
+                    rec.executed_qty,
+                    rec.avg_price,
+                    rec.order_id if rec.order_id is not None else 0,
+                )
+                log.info(
+                    "paper broker: stale protective order %s (%s) marked CANCELED", rec.client_order_id, symbol
+                )
 
     # ---- internals --------------------------------------------------------
 

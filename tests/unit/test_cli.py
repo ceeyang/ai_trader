@@ -114,3 +114,29 @@ def test_cli_status_prints_effective_parameters(tmp_path, monkeypatch):
     assert r.exit_code == 0 and "effective (from running process)" in r.output
     assert "entry_threshold=0.55" in r.output and "liquidation_notional_threshold_usdt=35000" in r.output
     assert "cooldown_s=900" in r.output and "news_sentiment" in r.output
+
+
+def test_cli_status_paper_prints_persisted_positions(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "p.db"))
+    monkeypatch.setenv("MODE", "paper")
+
+    async def _seed_paper():
+        st = Store(tmp_path / "p.db")
+        await st.open()
+        await st.set_kv("paper_state", json.dumps({
+            "version": 1, "wallet_balance": "9990.5", "realized_pnl": "-9.5", "next_order_id": 4,
+            "positions": {"BTCUSDT": {"qty": "-0.002", "entry_price": "80000"}},
+            "pending": [{"order_id": 2, "request": {
+                "symbol": "BTCUSDT", "side": "BUY", "type": "STOP_MARKET", "quantity": None, "price": None,
+                "stop_price": "80800", "reduce_only": False, "close_position": True,
+                "client_order_id": "ait-sl", "time_in_force": None}}],
+        }))
+        await st.close()
+
+    asyncio.run(_seed_paper())
+    r = CliRunner().invoke(app, ["status"])
+    assert r.exit_code == 0
+    assert "wallet=9990.5" in r.output and "BTCUSDT" in r.output and "SHORT" in r.output
+    assert "STOP_MARKET" in r.output and "ait-sl" in r.output

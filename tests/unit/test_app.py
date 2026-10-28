@@ -155,3 +155,30 @@ async def test_app_runs_autotuner_supervised(tmp_path, exchange_info):
     # empty DB: the first tick's activity_floor relaxes the shared config the aggregator reads
     assert {ch.rule for ch in changes} == {"activity_floor"}
     assert c.settings.strategy.entry_threshold < 0.6
+
+
+async def test_paper_broker_state_survives_app_restart(tmp_path, exchange_info):
+    from decimal import Decimal
+
+    from conftest import make_mark_price
+
+    from ai_trader.models import OrderRequest, OrderType, Side
+
+    c = await _components(tmp_path, exchange_info)
+    assert c.broker._store is c.store
+    await c.store.open()
+    await c.broker.start()
+    c.state.update_mark(make_mark_price(mark=Decimal(80000)))
+    await c.broker.submit(OrderRequest(symbol="BTCUSDT", side=Side.BUY, type=OrderType.MARKET,
+                                       quantity=Decimal("0.002"), client_order_id="ait-e"))
+    balance = c.broker.wallet_balance
+    await c.store.close()
+    await c.http.aclose()
+
+    c2 = await _components(tmp_path, exchange_info)
+    await c2.store.open()
+    await c2.broker.start()
+    assert c2.broker.wallet_balance == balance
+    assert c2.broker.positions_snapshot()["BTCUSDT"].quantity == Decimal("0.002")
+    await c2.store.close()
+    await c2.http.aclose()
