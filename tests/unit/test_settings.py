@@ -12,7 +12,7 @@ def test_defaults_point_to_testnet(monkeypatch):
     assert s.mode == "paper"
     assert s.symbols == ["BTCUSDT", "ETHUSDT"]
     assert s.risk.max_order_notional_usdt == Decimal("200")  # noqa: FURB157
-    assert s.claude.model == "claude-opus-5"
+    assert s.llm.model == "deepseek-chat"
 
 
 def test_mainnet_urls_when_testnet_false():

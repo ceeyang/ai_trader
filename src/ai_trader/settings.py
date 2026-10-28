@@ -64,11 +64,14 @@ class NewsConfig(BaseModel):
     x_daily_read_budget: int = 2000
 
 
-class ClaudeConfig(BaseModel):
+class LLMConfig(BaseModel):
     enabled: bool = True
-    model: str = "claude-opus-5"
+    provider: Literal["deepseek", "none"] = "deepseek"
+    model: str = "deepseek-chat"
+    base_url: str = "https://api.deepseek.com"
     daily_call_budget: int = 500
     max_text_chars: int = 4000
+    timeout_s: float = 30.0
 
 
 class Settings(BaseSettings):
@@ -80,6 +83,7 @@ class Settings(BaseSettings):
 
     binance_api_key: SecretStr | None = None
     binance_api_secret: SecretStr | None = None
+    deepseek_api_key: SecretStr | None = None
     binance_testnet: bool = True
     binance_rest_url: str | None = None
     binance_ws_url: str | None = None
@@ -95,7 +99,7 @@ class Settings(BaseSettings):
     strategy: StrategyConfig = StrategyConfig()
     detectors: DetectorConfig = DetectorConfig()
     news: NewsConfig = NewsConfig()
-    claude: ClaudeConfig = ClaudeConfig()
+    llm: LLMConfig = LLMConfig()
 
     @property
     def effective_rest_url(self) -> str:

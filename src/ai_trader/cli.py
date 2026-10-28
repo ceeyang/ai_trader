@@ -68,3 +68,51 @@ def probe() -> None:
     except BinanceError as exc:
         print(f"probe failed: {type(exc).__name__}: {exc}")
         raise typer.Exit(1) from None
+
+
+async def _classify(text: str) -> None:
+    import json
+
+    import httpx
+
+    from ai_trader.analysis.sentiment.deepseek import DeepSeekClassifier
+    from ai_trader.analysis.sentiment.keyword import KeywordClassifier
+    from ai_trader.data.news.base import DailyBudget
+    from ai_trader.models import NewsItem, new_id, utc_now
+    from ai_trader.settings import Settings
+
+    s = Settings()
+    item = NewsItem(
+        id=new_id(),
+        source="cli",
+        author=None,
+        title=text[:120],
+        text=text,
+        url=None,
+        published_at=utc_now(),
+        fetched_at=utc_now(),
+    )
+    keyword = KeywordClassifier(s.symbols)
+    async with httpx.AsyncClient() as http:
+        if s.llm.enabled and s.llm.provider == "deepseek" and s.deepseek_api_key:
+            classifier = DeepSeekClassifier(
+                http,
+                s.deepseek_api_key.get_secret_value(),
+                s.symbols,
+                model=s.llm.model,
+                base_url=s.llm.base_url,
+                fallback=keyword,
+                budget=DailyBudget(s.llm.daily_call_budget),
+                max_text_chars=s.llm.max_text_chars,
+                timeout_s=s.llm.timeout_s,
+            )
+            sentiment = await classifier.classify(item)
+        else:
+            sentiment = await keyword.classify(item)
+    print(json.dumps(sentiment.model_dump(mode="json"), ensure_ascii=False, indent=2))
+
+
+@app.command()
+def classify(text: str) -> None:
+    """Classify the sentiment of TEXT as if it were a news item."""
+    asyncio.run(_classify(text))
