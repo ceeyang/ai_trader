@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Example Crypto Feed</title>
+    <link>https://feed.example/</link>
+    <description>Example feed used by ai_trader's RSS source tests.</description>
+    <item>
+      <title>Bitcoin breaks above $80,000</title>
+      <link>https://feed.example/articles/btc-80k</link>
+      <guid>https://feed.example/articles/btc-80k</guid>
+      <pubDate>Thu, 29 Oct 2026 00:00:00 GMT</pubDate>
+      <description>&lt;p&gt;Bitcoin rallied past $80,000 today as traders cheered the move.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>Ethereum network upgrade goes live</title>
+      <link>https://feed.example/articles/eth-upgrade</link>
+      <guid>https://feed.example/articles/eth-upgrade</guid>
+      <pubDate>Thu, 29 Oct 2026 01:00:00 GMT</pubDate>
+      <description>&lt;p&gt;The long-awaited Ethereum network upgrade has been activated.&lt;/p&gt;</description>
+    </item>
+  </channel>
+</rss>
