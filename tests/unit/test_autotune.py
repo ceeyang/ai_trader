@@ -14,7 +14,7 @@ def mk(st, clock=None, **kw): return AutoTuner(st, StrategyConfig(), DetectorCon
 
 async def test_activity_floor_relaxes_thresholds_one_step(st):
     t = mk(st); changes = await t.tick()
-    assert t.detector_cfg.liquidation_notional_threshold_usdt == Decimal("35000") and abs(t.detector_cfg.news_min_confidence - 0.55) < 1e-9  # noqa: FURB157
+    assert t.detector_cfg.liquidation_notional_threshold_usdt == Decimal(35000) and abs(t.detector_cfg.news_min_confidence - 0.55) < 1e-9
     assert abs(t.strategy_cfg.entry_threshold - 0.55) < 1e-9 and {c.rule for c in changes} == {"activity_floor"}
     assert len(await st.tuning_log(10)) == len(changes)
 
@@ -41,7 +41,7 @@ async def test_activity_floor_full_step_values_and_log(st):
 async def test_activity_floor_respects_floors(st):
     t = mk(st)
     for _ in range(40): await t.tick()
-    assert t.detector_cfg.liquidation_notional_threshold_usdt >= Decimal("5000") and t.detector_cfg.news_min_confidence >= 0.3 - 1e-9 and t.strategy_cfg.entry_threshold >= 0.3 - 1e-9  # noqa: FURB157
+    assert t.detector_cfg.liquidation_notional_threshold_usdt >= Decimal(5000) and t.detector_cfg.news_min_confidence >= 0.3 - 1e-9 and t.strategy_cfg.entry_threshold >= 0.3 - 1e-9
 
 
 async def test_activity_floor_floors_are_exact_and_stop_logging(st):
@@ -102,9 +102,9 @@ async def test_loss_brake_halves_notional(st):
     # previous UTC day, which "当日已实现盈亏" cannot see. Same scenario two hours into the day.
     now = T0 + timedelta(hours=2)
     await st.set_kv("day_start_equity:2026-10-29", "10000")
-    await st.insert_fill(make_fill("c1", realized_pnl=Decimal("-250"), event_time=now - timedelta(hours=1)))  # noqa: FURB157
+    await st.insert_fill(make_fill("c1", realized_pnl=Decimal(-250), event_time=now - timedelta(hours=1)))
     t = mk(st, clock=lambda: now.timestamp()); await t.tick()
-    assert t.strategy_cfg.base_notional_usdt == Decimal("50") and abs(t.strategy_cfg.entry_threshold - 0.65) < 1e-9   # 0.6 − 0.05 (activity_floor) + 0.1  # noqa: FURB157
+    assert t.strategy_cfg.base_notional_usdt == Decimal(50) and abs(t.strategy_cfg.entry_threshold - 0.65) < 1e-9   # 0.6 − 0.05 (activity_floor) + 0.1
 
 
 async def test_loss_brake_ignores_previous_day_and_missing_equity(st):
@@ -220,3 +220,85 @@ async def test_run_ticks_and_stops_promptly(st):
     await asyncio.wait_for(task, timeout=1)
     assert await st.get_kv("tuning_effective") is not None
     assert len(await st.tuning_log(100)) == 4  # exactly one tick ran
+
+
+async def _tuned_snapshot(st):
+    """Publish the values a tuned process would leave behind."""
+    s = StrategyConfig(entry_threshold=0.85, base_notional_usdt=Decimal(25), cooldown_s=2025)
+    s.detector_weights["funding_extreme"] = 0.0
+    d = DetectorConfig(liquidation_notional_threshold_usdt=Decimal(12005),
+                       funding_annualized_threshold=Decimal("0.1536"), news_min_confidence=0.45)
+    await AutoTuner(st, s, d, clock=lambda: T0.timestamp()).publish_effective()
+
+
+async def test_restore_effective_copies_tuned_values_onto_shared_configs(st):
+    await _tuned_snapshot(st)
+    strategy, detectors = StrategyConfig(), DetectorConfig()
+    weights = strategy.detector_weights
+    t = AutoTuner(st, strategy, detectors, clock=lambda: T0.timestamp())
+    assert await t.restore_effective() is True
+    assert t.strategy_cfg is strategy and t.detector_cfg is detectors and strategy.detector_weights is weights
+    assert strategy.entry_threshold == 0.85 and strategy.base_notional_usdt == Decimal(25)
+    assert strategy.cooldown_s == 2025 and weights["funding_extreme"] == 0.0 and weights["news_sentiment"] == 1.0
+    assert detectors.liquidation_notional_threshold_usdt == Decimal(12005)
+    assert detectors.funding_annualized_threshold == Decimal("0.1536")
+    assert detectors.news_min_confidence == 0.45
+
+
+async def test_restore_effective_clamps_and_ignores_unknown_detectors(st):
+    await st.set_kv("tuning_effective", json.dumps({
+        "strategy": {"entry_threshold": 5, "base_notional_usdt": "1", "cooldown_s": 99999,
+                     "detector_weights": {"news_sentiment": 9, "made_up": 1.0}},
+        "detectors": {"funding_annualized_threshold": "0.0001", "liquidation_notional_threshold_usdt": "1",
+                      "news_min_confidence": 0.0},
+    }))
+    strategy, detectors = StrategyConfig(), DetectorConfig()
+    assert await AutoTuner(st, strategy, detectors).restore_effective() is True
+    assert strategy.entry_threshold == 0.9 and strategy.base_notional_usdt == Decimal(20)
+    assert strategy.cooldown_s == 3600 and strategy.detector_weights["news_sentiment"] == 1.5
+    assert "made_up" not in strategy.detector_weights
+    assert detectors.funding_annualized_threshold == Decimal("0.05")
+    assert detectors.liquidation_notional_threshold_usdt == Decimal(5000)
+    assert detectors.news_min_confidence == 0.3
+
+
+async def test_restore_effective_never_looser_than_configured_brakes(st):
+    # a published cooldown below the configured one, and a notional above the default cap
+    await st.set_kv("tuning_effective", json.dumps({
+        "strategy": {"entry_threshold": 0.6, "base_notional_usdt": "500", "cooldown_s": 10,
+                     "detector_weights": {}},
+        "detectors": {"funding_annualized_threshold": "0.3", "liquidation_notional_threshold_usdt": "50000",
+                      "news_min_confidence": 0.6},
+    }))
+    strategy = StrategyConfig()
+    assert await AutoTuner(st, strategy, DetectorConfig()).restore_effective() is True
+    assert strategy.cooldown_s == 900 and strategy.base_notional_usdt == Decimal(100)
+
+
+async def test_restore_effective_missing_or_malformed_changes_nothing(st):
+    strategy, detectors = StrategyConfig(), DetectorConfig()
+    t = AutoTuner(st, strategy, detectors)
+    assert await t.restore_effective() is False
+    await st.set_kv("tuning_effective", '{"strategy": {"entry_threshold": 0.8}')
+    assert await t.restore_effective() is False
+    await st.set_kv("tuning_effective", json.dumps({"strategy": {"entry_threshold": 0.8}, "detectors": {}}))
+    assert await t.restore_effective() is False
+    assert strategy == StrategyConfig() and detectors == DetectorConfig()
+
+
+async def test_run_restores_before_first_tick(st):
+    await _tuned_snapshot(st)
+    strategy = StrategyConfig()
+    t = AutoTuner(st, strategy, DetectorConfig(), interval_s=3600, clock=lambda: T0.timestamp())
+    task = asyncio.create_task(t.run())
+    for _ in range(100):
+        if await st.tuning_log(1):
+            break
+        await asyncio.sleep(0.01)
+    await t.stop()
+    await asyncio.wait_for(task, timeout=1)
+    # restored 0.85, then the quiet-market tick relaxed it one step (not the default 0.6 − 0.05)
+    assert abs(strategy.entry_threshold - 0.80) < 1e-9
+    assert strategy.base_notional_usdt == Decimal(25)
+    snap = json.loads(await st.get_kv("tuning_effective"))
+    assert abs(snap["strategy"]["entry_threshold"] - 0.80) < 1e-9

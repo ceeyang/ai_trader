@@ -56,6 +56,7 @@ log = logging.getLogger(__name__)
 _TRIGGER_TYPES = {OrderType.STOP_MARKET, OrderType.TAKE_PROFIT_MARKET}
 _BPS = Decimal(10000)
 PAPER_STATE_KV_KEY = "paper_state"
+PAPER_STATE_BAD_KV_KEY = "paper_state_bad"
 _STATE_VERSION = 1
 
 
@@ -78,6 +79,29 @@ def _triggered(req: OrderRequest, mark: Decimal) -> bool:
     if req.type == OrderType.TAKE_PROFIT_MARKET:
         return mark >= stop if req.side == Side.SELL else mark <= stop
     return False
+
+
+def _parse_state(
+    raw: str,
+) -> tuple[Decimal, Decimal, int, dict[str, "_Pos"], dict[str, tuple[OrderRequest, int]]]:
+    """Parse a `paper_state` blob completely, or raise; nothing is assigned on failure."""
+    snap = json.loads(raw)
+    if not isinstance(snap, dict) or snap.get("version") != _STATE_VERSION:
+        raise ValueError("paper_state is not a version-1 object")
+    wallet = Decimal(snap["wallet_balance"])
+    realized = Decimal(snap["realized_pnl"])
+    next_id = int(snap["next_order_id"])
+    positions = {
+        str(s): _Pos(qty=Decimal(p["qty"]), entry_price=Decimal(p["entry_price"]))
+        for s, p in snap["positions"].items()
+    }
+    pending: dict[str, tuple[OrderRequest, int]] = {}
+    for item in snap["pending"]:
+        req = OrderRequest.model_validate(item["request"])
+        pending[req.client_order_id] = (req, int(item["order_id"]))
+    if not (wallet.is_finite() and realized.is_finite() and next_id >= 1):
+        raise ValueError("paper_state holds non-finite balances or an invalid order id")
+    return wallet, realized, next_id, positions, pending
 
 
 class PaperBroker:
@@ -287,25 +311,31 @@ class PaperBroker:
         assert self._store is not None
         raw = await self._store.get_kv(PAPER_STATE_KV_KEY)
         if raw is not None:
-            snap = json.loads(raw)
-            self.wallet_balance = Decimal(snap["wallet_balance"])
-            self.realized_pnl = Decimal(snap["realized_pnl"])
-            self._next_order_id = int(snap["next_order_id"])
-            self._positions = {
-                s: _Pos(qty=Decimal(p["qty"]), entry_price=Decimal(p["entry_price"]))
-                for s, p in snap["positions"].items()
-            }
-            self._pending = {}
-            for item in snap["pending"]:
-                req = OrderRequest.model_validate(item["request"])
-                self._pending[req.client_order_id] = (req, int(item["order_id"]))
-            log.info(
-                "paper broker: restored state (wallet=%s positions=%s resting_orders=%d)",
-                self.wallet_balance,
-                ",".join(f"{s}:{p.qty}" for s, p in self._positions.items()) or "none",
-                len(self._pending),
-            )
-        await self._reconcile_orders()
+            try:
+                wallet, realized, next_id, positions, pending = _parse_state(raw)
+            except Exception:
+                # Never crash-loop on a bad blob: keep it for inspection, start from scratch.
+                log.exception(
+                    "paper broker: unreadable %s; saved as %s, starting from initial balance %s",
+                    PAPER_STATE_KV_KEY,
+                    PAPER_STATE_BAD_KV_KEY,
+                    self.wallet_balance,
+                )
+                await self._store.set_kv(PAPER_STATE_BAD_KV_KEY, raw)
+            else:
+                self.wallet_balance, self.realized_pnl = wallet, realized
+                self._next_order_id = max(self._next_order_id, next_id)
+                self._positions, self._pending = positions, pending
+                log.info(
+                    "paper broker: restored state (wallet=%s positions=%s resting_orders=%d)",
+                    self.wallet_balance,
+                    ",".join(f"{s}:{p.qty}" for s, p in self._positions.items()) or "none",
+                    len(self._pending),
+                )
+        try:
+            await self._reconcile_orders()
+        except Exception:
+            log.exception("paper broker: reconciling the orders table failed")
 
     async def _reconcile_orders(self) -> None:
         """Mark protective rows the DB still shows as open, but which no longer rest here, CANCELED."""

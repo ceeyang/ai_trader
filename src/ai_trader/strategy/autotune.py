@@ -25,12 +25,15 @@ written to `tuning_log` and logged. The tuner never sees, let alone changes, `Ri
 
 After every tick (and when `run()` starts) the current effective values are written as
 JSON to kv `tuning_effective`, so `ai-trader status` in another process can show them.
+`run()` first restores those values onto the config objects (`restore_effective`), so a
+restarted process keeps its brakes and relaxations instead of falling back to defaults.
 """
 
 import asyncio
 import contextlib
 import json
 import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -245,13 +248,54 @@ class AutoTuner:
     async def publish_effective(self) -> None:
         await self._store.set_kv(EFFECTIVE_KV_KEY, json.dumps(self.effective()))
 
+    async def restore_effective(self) -> bool:
+        """Copy the values a previous process published to kv `tuning_effective` back onto
+        the shared config objects, so a restart does not undo the brakes. Values are clamped
+        to the rules' floors/caps (and never looser than configured where a rule only ever
+        tightens); weights are updated in place and only for detectors already configured.
+        Returns False, changing nothing, when the kv is missing or malformed."""
+        raw = await self._store.get_kv(EFFECTIVE_KV_KEY)
+        if raw is None:
+            return False
+        s, d = self.strategy_cfg, self.detector_cfg
+        try:
+            snap = json.loads(raw)
+            st, dt = snap["strategy"], snap["detectors"]
+            entry = min(ENTRY_CAP, max(ENTRY_FLOOR, float(st["entry_threshold"])))
+            notional = min(max(s.base_notional_usdt, NOTIONAL_DEFAULT),
+                           max(NOTIONAL_FLOOR, Decimal(str(st["base_notional_usdt"]))))
+            cooldown = max(s.cooldown_s, min(COOLDOWN_CAP, int(st["cooldown_s"])))
+            weights = {
+                k: min(WEIGHT_CAP, max(0.0, float(v)))
+                for k, v in dict(st["detector_weights"]).items()
+                if k in s.detector_weights
+            }
+            funding = max(FUNDING_FLOOR, Decimal(str(dt["funding_annualized_threshold"])))
+            liq = max(LIQ_FLOOR, Decimal(str(dt["liquidation_notional_threshold_usdt"])))
+            news = min(1.0, max(NEWS_FLOOR, float(dt["news_min_confidence"])))
+            if not (notional.is_finite() and funding.is_finite() and liq.is_finite()):
+                raise ValueError("non-finite value")
+            if not all(math.isfinite(x) for x in (entry, news, *weights.values())):
+                raise ValueError("non-finite value")
+        except Exception:
+            log.exception("autotune: ignoring unreadable %s", EFFECTIVE_KV_KEY)
+            return False
+        s.entry_threshold, s.base_notional_usdt, s.cooldown_s = entry, notional, cooldown
+        s.detector_weights.update(weights)  # same dict object the aggregator reads
+        d.funding_annualized_threshold = funding
+        d.liquidation_notional_threshold_usdt = liq
+        d.news_min_confidence = news
+        log.info("autotune: restored effective parameters from %s (as of %s)", EFFECTIVE_KV_KEY, snap.get("ts"))
+        return True
+
     # ---- lifecycle --------------------------------------------------------
 
     async def run(self) -> None:
         try:
+            await self.restore_effective()
             await self.publish_effective()
         except Exception:
-            log.exception("autotune: publishing effective parameters failed")
+            log.exception("autotune: restoring/publishing effective parameters failed")
         while not self._stop_event.is_set():
             try:
                 await self.tick()

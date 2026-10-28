@@ -103,6 +103,15 @@ class ExecutionService:
     # ---- lifecycle --------------------------------------------------------
 
     async def start(self) -> None:
+        # Positions that already exist at start-up (restored paper state, or live positions
+        # left from before a restart) never went through `_on_entry_filled`: track them for
+        # max-hold from now, with the configured `max_hold_s`.
+        now = self._clock()
+        for symbol in self._broker.positions_snapshot():
+            if symbol not in self._entry_time:
+                self._entry_time[symbol] = _Held(entered_at=now, max_hold_s=self._settings.strategy.max_hold_s)
+                log.info("tracking pre-existing %s position for max hold (%ss from now)",
+                         symbol, self._settings.strategy.max_hold_s)
         self._bus.subscribe(Decision, self.handle_decision)
         self._bus.subscribe(Fill, self.on_fill)
         self._bus.subscribe(OrderResult, self.on_order_result)

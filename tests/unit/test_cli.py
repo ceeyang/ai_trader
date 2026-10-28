@@ -140,3 +140,21 @@ def test_cli_status_paper_prints_persisted_positions(tmp_path, monkeypatch):
     assert r.exit_code == 0
     assert "wallet=9990.5" in r.output and "BTCUSDT" in r.output and "SHORT" in r.output
     assert "STOP_MARKET" in r.output and "ait-sl" in r.output
+
+
+def test_cli_status_survives_unreadable_kv(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "u.db"))
+    monkeypatch.setenv("MODE", "paper")
+
+    async def _seed_bad():
+        st = Store(tmp_path / "u.db")
+        await st.open()
+        await st.set_kv("tuning_effective", '{"strategy": {')
+        await st.set_kv("paper_state", '{"wallet_balance": "1"}')
+        await st.close()
+
+    asyncio.run(_seed_bad())
+    r = CliRunner().invoke(app, ["status"])
+    assert r.exit_code == 0
+    assert "unreadable kv `tuning_effective`" in r.output and "unreadable kv `paper_state`" in r.output
+    assert "last signals" in r.output

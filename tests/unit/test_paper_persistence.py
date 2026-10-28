@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from conftest import make_mark_price, make_order_record
 
-from ai_trader.execution.paper import PAPER_STATE_KV_KEY, PaperBroker
+from ai_trader.execution.paper import PAPER_STATE_BAD_KV_KEY, PAPER_STATE_KV_KEY, PaperBroker
 from ai_trader.models import OrderRequest, OrderRole, OrderStatus, OrderType, PositionSide, Side
 
 
@@ -125,3 +125,40 @@ async def test_without_store_nothing_is_persisted(st, bus, state, exchange_info)
     await pb.start()
     await pb.submit(_entry())
     assert await st.get_kv(PAPER_STATE_KV_KEY) is None
+
+
+async def _corrupt_start(st, bus, state, exchange_info, blob: str) -> PaperBroker:
+    await st.upsert_order(make_order_record("ait-old", role=OrderRole.STOP_LOSS, status=OrderStatus.NEW))
+    await st.set_kv(PAPER_STATE_KV_KEY, blob)
+    pb = PaperBroker(state, bus, exchange_info, store=st, initial_balance=Decimal(5000))
+    await pb.start()  # must not raise: a crash here would crash-loop under the watchdog
+    return pb
+
+
+async def test_corrupted_paper_state_starts_fresh_and_keeps_blob(st, bus, state, exchange_info):
+    pb = await _corrupt_start(st, bus, state, exchange_info, '{"version": 1, "wallet_bal')
+    assert pb.wallet_balance == Decimal(5000) and pb.realized_pnl == Decimal(0)
+    assert pb.positions_snapshot() == {} and pb._pending == {}
+    assert await st.get_kv(PAPER_STATE_BAD_KV_KEY) == '{"version": 1, "wallet_bal'
+    assert (await st.get_order("ait-old")).status == OrderStatus.CANCELED
+
+
+async def test_partially_bad_paper_state_assigns_nothing(st, bus, state, exchange_info):
+    # valid balances and positions, but a broken pending entry at the end
+    blob = json.dumps({
+        "version": 1, "wallet_balance": "123", "realized_pnl": "-7", "next_order_id": 9,
+        "positions": {"BTCUSDT": {"qty": "0.002", "entry_price": "80000"}},
+        "pending": [{"order_id": 2, "request": {"symbol": "BTCUSDT"}}],
+    })
+    pb = await _corrupt_start(st, bus, state, exchange_info, blob)
+    assert pb.wallet_balance == Decimal(5000) and pb.positions_snapshot() == {}
+    assert pb._next_order_id == 1
+    assert await st.get_kv(PAPER_STATE_BAD_KV_KEY) == blob
+
+
+async def test_unknown_paper_state_version_is_rejected(st, bus, state, exchange_info):
+    blob = json.dumps({"version": 2, "wallet_balance": "1", "realized_pnl": "0", "next_order_id": 1,
+                       "positions": {}, "pending": []})
+    pb = await _corrupt_start(st, bus, state, exchange_info, blob)
+    assert pb.wallet_balance == Decimal(5000)
+    assert await st.get_kv(PAPER_STATE_BAD_KV_KEY) == blob

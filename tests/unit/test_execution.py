@@ -316,3 +316,31 @@ async def test_adjusted_notional_zero_is_respected(bus, st, state, exchange_info
     await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(900)))
     assert paper.submitted == []  # 0 notional -> FilterViolation, not the decision's 900
     await svc.stop()
+
+
+async def test_preexisting_position_is_tracked_for_max_hold_after_start(bus, st, state, exchange_info):
+    from ai_trader.models import OrderRequest
+
+    clock = Clock(T0.timestamp())
+    state.update_mark(make_mark_price(mark=Decimal(80000)))
+    paper = PaperBroker(state, bus, exchange_info)
+    await bus.start()
+    await paper.start()
+    # a position that exists before the service starts (e.g. restored after a restart)
+    await paper.submit(OrderRequest(symbol="BTCUSDT", side=Side.BUY, type=OrderType.MARKET,
+                                    quantity=Decimal("0.002"), client_order_id="ait-pre"))
+    settings = Settings(_env_file=None)
+    svc = ExecutionService(bus, paper, AlwaysApprove(), st, settings, state=state, clock=clock)
+    await svc.start()
+    decisions: list[Decision] = []
+    bus.subscribe(Decision, lambda e: _append(decisions, e))
+    clock.t = T0.timestamp() + settings.strategy.max_hold_s - 1
+    await svc.enforce_max_hold()
+    await bus.drain()
+    assert decisions == []
+    clock.t = T0.timestamp() + settings.strategy.max_hold_s + 1
+    await svc.enforce_max_hold()
+    await bus.drain()
+    assert [(d.intent, d.symbol, d.side) for d in decisions] == [(Intent.CLOSE, "BTCUSDT", Side.SELL)]
+    assert await paper.positions() == {}
+    await svc.stop()

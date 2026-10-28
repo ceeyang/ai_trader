@@ -239,17 +239,31 @@ def kill() -> None:
     asyncio.run(_kill())
 
 
+# What a malformed kv JSON blob can raise while being read (JSONDecodeError is a ValueError,
+# decimal.InvalidOperation an ArithmeticError).
+_UNREADABLE = (ValueError, KeyError, TypeError, AttributeError, IndexError, ArithmeticError)
+
+
 def _print_tuning_params(s, effective_json: str | None) -> None:
     """Print the auto-tuned parameters: the running process's values from kv
     `tuning_effective` when present, else this process's configured defaults."""
+    try:
+        lines = _tuning_param_lines(s, effective_json)
+    except _UNREADABLE as exc:  # a bad kv value must not break `status`
+        lines = [f"tuned parameters - unreadable kv `tuning_effective` ({type(exc).__name__})"]
+    for line in lines:
+        print(line)
+
+
+def _tuning_param_lines(s, effective_json: str | None) -> list[str]:
     import json
 
     if effective_json is not None:
         eff = json.loads(effective_json)
-        print(f"tuned parameters - effective (from running process), as of {eff.get('ts', '?')}:")
+        head = f"tuned parameters - effective (from running process), as of {eff.get('ts', '?')}:"
         strat, det = eff["strategy"], eff["detectors"]
     else:
-        print("tuned parameters - configured defaults (no running process has published values yet):")
+        head = "tuned parameters - configured defaults (no running process has published values yet):"
         strat = {
             "entry_threshold": s.strategy.entry_threshold,
             "base_notional_usdt": str(s.strategy.base_notional_usdt),
@@ -261,43 +275,56 @@ def _print_tuning_params(s, effective_json: str | None) -> None:
             "liquidation_notional_threshold_usdt": str(s.detectors.liquidation_notional_threshold_usdt),
             "news_min_confidence": s.detectors.news_min_confidence,
         }
-    print(
-        f"  entry_threshold={strat['entry_threshold']:g}  base_notional_usdt={strat['base_notional_usdt']}  "
-        f"cooldown_s={strat['cooldown_s']}"
-    )
     weights = " ".join(f"{k}={v:g}" for k, v in sorted(strat["detector_weights"].items()))
-    print(f"  detector_weights: {weights}")
-    print(
-        f"  funding_annualized_threshold={det['funding_annualized_threshold']}  "
-        f"liquidation_notional_threshold_usdt={det['liquidation_notional_threshold_usdt']}  "
-        f"news_min_confidence={det['news_min_confidence']:g}"
-    )
+    return [
+        head,
+        (
+            f"  entry_threshold={strat['entry_threshold']:g}  base_notional_usdt={strat['base_notional_usdt']}  "
+            f"cooldown_s={strat['cooldown_s']}"
+        ),
+        f"  detector_weights: {weights}",
+        (
+            f"  funding_annualized_threshold={det['funding_annualized_threshold']}  "
+            f"liquidation_notional_threshold_usdt={det['liquidation_notional_threshold_usdt']}  "
+            f"news_min_confidence={det['news_min_confidence']:g}"
+        ),
+    ]
 
 
 def _print_paper_state(raw: str | None) -> None:
     """Print the paper account as last persisted by the running process (kv `paper_state`)."""
-    import json
-    from decimal import Decimal
-
     if raw is None:
         print("positions: no persisted paper account yet (starts when `ai-trader run --mode paper` trades)")
         return
+    try:
+        lines = _paper_state_lines(raw)
+    except _UNREADABLE as exc:  # a bad kv value must not break `status`
+        lines = [f"paper account: unreadable kv `paper_state` ({type(exc).__name__})"]
+    for line in lines:
+        print(line)
+
+
+def _paper_state_lines(raw: str) -> list[str]:
+    import json
+    from decimal import Decimal
+
     snap = json.loads(raw)
-    print(f"paper account (persisted): wallet={snap['wallet_balance']} realized_pnl={snap['realized_pnl']} USDT")
+    lines = [f"paper account (persisted): wallet={snap['wallet_balance']} realized_pnl={snap['realized_pnl']} USDT"]
     positions = snap["positions"]
-    print("positions:" + ("" if positions else " (none)"))
+    lines.append("positions:" + ("" if positions else " (none)"))
     for symbol, p in sorted(positions.items()):
         qty = Decimal(p["qty"])
         side = "LONG" if qty > 0 else "SHORT"
-        print(f"  {symbol:<10} {side:<5} qty={abs(qty)} entry={p['entry_price']}")
+        lines.append(f"  {symbol:<10} {side:<5} qty={abs(qty)} entry={p['entry_price']}")
     pending = snap["pending"]
-    print("open orders:" + ("" if pending else " (none)"))
+    lines.append("open orders:" + ("" if pending else " (none)"))
     for item in pending:
         req = item["request"]
-        print(
+        lines.append(
             f"  {req['symbol']:<10} {req['side']:<4} {req['type']:<20} stop={req['stop_price']} "
             f"{req['client_order_id']}"
         )
+    return lines
 
 
 async def _status() -> None:
