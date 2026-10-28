@@ -1,5 +1,6 @@
 """Shared test constructors (design 5.10 brief, Task 5). Later tasks import by these names."""
 
+import asyncio
 import json
 import pathlib
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,7 @@ import pytest
 
 from ai_trader.bus import EventBus
 from ai_trader.data.market_state import MarketState
+from ai_trader.exchange.binance.parsers import parse_exchange_info
 from ai_trader.models import (
     AccountState,
     Decision,
@@ -239,3 +241,39 @@ def state_fresh():
 def state_stale():
     """An empty MarketState: `age_s` returns None for every symbol."""
     return MarketState()
+
+
+@pytest.fixture
+def state():
+    """An empty MarketState with the default clock."""
+    return MarketState()
+
+
+@pytest.fixture
+def exchange_info():
+    return parse_exchange_info(fx("exchange_info.json"))
+
+
+class _FakeWS:
+    """Stands in for `BinanceFuturesWS`: `run()` blocks until `stop()`; no network."""
+
+    def __init__(self, url, handler) -> None:
+        self.url = url
+        self.handler = handler
+        self._stopped = asyncio.Event()
+
+    async def run(self) -> None:
+        await self._stopped.wait()
+
+    async def stop(self) -> None:
+        self._stopped.set()
+
+
+def fake_ws_factory(url, handler):
+    """`ws_factory` for `BinanceFuturesBroker`: records `handler` under `url` so a test
+    can feed user-stream messages straight into it."""
+    fake_ws_factory.handlers[url] = handler
+    return _FakeWS(url, handler)
+
+
+fake_ws_factory.handlers = {}
