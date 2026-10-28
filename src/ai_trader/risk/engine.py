@@ -13,6 +13,13 @@ checks, in that order.
 mutated at runtime by the AutoTuner (`RiskLimits` itself never is, but this engine does
 not assume that). Every verdict — approved or not — is persisted via
 `store.insert_risk_verdict` before `evaluate` returns.
+
+`clock()` is read once per `evaluate` call and used to derive both the UTC day key and
+the day-start window, so a single call can't straddle two different "now"s. The day's
+starting equity (`day_start_equity:<day>`) is written, if missing, at the very start of
+every call — regardless of intent or outcome — so it reflects the account's balance at
+the first evaluation of the day, not just the first OPEN that happens to reach the
+daily-loss check.
 """
 
 import logging
@@ -54,6 +61,13 @@ class RiskEngine:
 
     async def _evaluate(self, d: Decision, account: AccountState) -> RiskVerdict:
         limits = self._limits  # read fresh at call time, never cached
+        now = self._clock()
+        day_start = datetime.fromtimestamp(now, UTC).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        # Capture the day's starting equity on the first evaluation of the day,
+        # regardless of what this particular decision's outcome turns out to be.
+        start = await self._day_start_equity(day_start, account)
 
         if await self._store.get_kv("kill_switch") == "1":
             return self._rejected(d, "kill_switch")
@@ -82,10 +96,6 @@ class RiskEngine:
         if len(account.open_positions()) >= limits.max_open_positions:
             return self._rejected(d, "max_open_positions", adjusted_notional)
 
-        start = await self._day_start_equity(account)
-        day_start = datetime.fromtimestamp(self._clock(), UTC).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
         pnl = await self._store.realized_pnl_since(day_start)
         threshold = -(limits.max_daily_loss_pct / Decimal(100)) * start
         if pnl <= threshold:
@@ -96,9 +106,8 @@ class RiskEngine:
 
         return RiskVerdict(approved=True, adjusted_notional=adjusted_notional)
 
-    async def _day_start_equity(self, account: AccountState) -> Decimal:
-        day = datetime.fromtimestamp(self._clock(), UTC).date()
-        key = f"day_start_equity:{day.isoformat()}"
+    async def _day_start_equity(self, day_start: datetime, account: AccountState) -> Decimal:
+        key = f"day_start_equity:{day_start.date().isoformat()}"
         existing = await self._store.get_kv(key)
         if existing is None:
             existing = str(account.total_wallet_balance)

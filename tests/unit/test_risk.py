@@ -127,6 +127,7 @@ async def test_kill_switch_cancels_and_closes(st):
     class FakeBroker:
         def __init__(self):
             self.cancel_all_calls, self.close_calls = set(), []
+            self.calls: list[tuple[str, str]] = []  # ordered log: (op, symbol)
 
         async def positions(self):
             return {"BTCUSDT": make_position(PositionSide.LONG, Decimal("0.002"), Decimal("80000"))}  # noqa: FURB157
@@ -136,9 +137,11 @@ async def test_kill_switch_cancels_and_closes(st):
 
         async def cancel_all(self, s):
             self.cancel_all_calls.add(s)
+            self.calls.append(("cancel_all", s))
 
         async def close_position(self, s):
             self.close_calls.append(s)
+            self.calls.append(("close_position", s))
             return None  # noqa: PLR1711, RET501
 
     broker = FakeBroker()
@@ -155,3 +158,88 @@ async def test_kill_switch_cancels_and_closes(st):
     assert broker.cancel_all_calls == {"BTCUSDT", "ETHUSDT"}
     assert broker.close_calls == ["BTCUSDT"]
     assert events[-1].reason == "test"
+    # cancel must be attempted before close for the same symbol
+    assert broker.calls.index(("cancel_all", "BTCUSDT")) < broker.calls.index(("close_position", "BTCUSDT"))
+
+
+async def test_kill_switch_survives_open_order_symbols_failure(st, caplog):
+    """A REST timeout fetching open-order symbols must not abort the sweep: the known
+    position is still closed, and the event is still published (Important finding 1)."""
+
+    class FailingOrderSymbolsBroker:
+        def __init__(self):
+            self.cancel_all_calls, self.close_calls = set(), []
+
+        async def positions(self):
+            return {"BTCUSDT": make_position(PositionSide.LONG, Decimal("0.002"), Decimal("80000"))}  # noqa: FURB157
+
+        async def open_order_symbols(self):
+            raise TimeoutError("rest timeout")
+
+        async def cancel_all(self, s):
+            self.cancel_all_calls.add(s)
+
+        async def close_position(self, s):
+            self.close_calls.append(s)
+            return None  # noqa: PLR1711, RET501
+
+    broker = FailingOrderSymbolsBroker()
+    bus = EventBus()
+    events = []
+    bus.subscribe(KillSwitchTriggered, lambda e: _append(events, e))
+    ks = KillSwitch(st, broker, bus)
+    await bus.start()
+    with caplog.at_level("ERROR", logger="ai_trader.risk.kill_switch"):
+        await ks.trigger("rest down")
+    await bus.drain()
+    await bus.stop()
+
+    assert await ks.is_active()
+    assert broker.cancel_all_calls == {"BTCUSDT"}
+    assert broker.close_calls == ["BTCUSDT"]
+    assert events[-1].reason == "rest down"
+    assert any("failed to fetch open order symbols" in r.getMessage() for r in caplog.records)
+
+
+async def test_kill_switch_closes_position_despite_cancel_all_failure(st):
+    """A failed cancel_all for one symbol must not skip close_position for it, and the
+    next symbol must still be processed (Important finding 2)."""
+
+    class PartiallyFailingBroker:
+        def __init__(self):
+            self.cancel_all_calls, self.close_calls = [], []
+
+        async def positions(self):
+            return {
+                "BTCUSDT": make_position(PositionSide.LONG, Decimal("0.002"), Decimal("80000")),  # noqa: FURB157
+                "ETHUSDT": make_position(
+                    PositionSide.SHORT, Decimal("0.01"), Decimal("3000"), symbol="ETHUSDT"  # noqa: FURB157
+                ),
+            }
+
+        async def open_order_symbols(self):
+            return set()
+
+        async def cancel_all(self, s):
+            self.cancel_all_calls.append(s)
+            if s == "BTCUSDT":
+                raise RuntimeError("cancel failed")
+
+        async def close_position(self, s):
+            self.close_calls.append(s)
+            return None  # noqa: PLR1711, RET501
+
+    broker = PartiallyFailingBroker()
+    bus = EventBus()
+    events = []
+    bus.subscribe(KillSwitchTriggered, lambda e: _append(events, e))
+    ks = KillSwitch(st, broker, bus)
+    await bus.start()
+    await ks.trigger("cancel flaky")
+    await bus.drain()
+    await bus.stop()
+
+    assert await ks.is_active()
+    assert set(broker.cancel_all_calls) == {"BTCUSDT", "ETHUSDT"}
+    assert set(broker.close_calls) == {"BTCUSDT", "ETHUSDT"}
+    assert events[-1].reason == "cancel flaky"
