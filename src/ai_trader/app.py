@@ -128,8 +128,24 @@ async def create_components(
     if settings.mode == "live" and not (key and secret):
         raise SystemExit("live 模式需要 BINANCE_API_KEY/BINANCE_API_SECRET")
 
+    own_rest, own_http = rest is None, http is None
     rest = rest or BinanceFuturesRest(settings.effective_rest_url, key, secret)
     http = http or httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+    try:
+        return await _wire(settings, rest, http, ws_factory, store)
+    except BaseException:
+        # Close only the clients this call created; injected ones belong to the caller.
+        if own_rest:
+            await rest.aclose()
+        if own_http:
+            await http.aclose()
+        raise
+
+
+async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, store: Store | None) -> Components:
+    if settings.mode == "live":
+        # Signed requests carry a timestamp checked against recvWindow: align to server time.
+        await rest.sync_time()
     exchange_info = await rest.exchange_info()
 
     bus = EventBus()

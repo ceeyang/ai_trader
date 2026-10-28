@@ -6,7 +6,7 @@ TEXT. Everything is read back into the matching pydantic model.
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import NamedTuple
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS signals (
 CREATE TABLE IF NOT EXISTS forward_returns (
     signal_id TEXT NOT NULL REFERENCES signals(id),
     horizon_s INTEGER NOT NULL,
-    ret REAL NOT NULL,
+    ret REAL,  -- NULL: unscorable (no mark sample near the horizon); never retried
     computed_at TEXT NOT NULL,
     PRIMARY KEY (signal_id, horizon_s)
 );
@@ -143,6 +143,28 @@ CREATE TABLE IF NOT EXISTS kv (
     value TEXT NOT NULL
 );
 """
+
+async def _migrate_forward_returns_nullable(db: aiosqlite.Connection) -> None:
+    """Databases created before `forward_returns.ret` became nullable: rebuild the table."""
+    cur = await db.execute("PRAGMA table_info(forward_returns)")
+    cols = {row[1]: row for row in await cur.fetchall()}
+    if not cols["ret"][3]:  # notnull flag
+        return
+    await db.executescript(
+        """
+        ALTER TABLE forward_returns RENAME TO forward_returns_old;
+        CREATE TABLE forward_returns (
+            signal_id TEXT NOT NULL REFERENCES signals(id),
+            horizon_s INTEGER NOT NULL,
+            ret REAL,
+            computed_at TEXT NOT NULL,
+            PRIMARY KEY (signal_id, horizon_s)
+        );
+        INSERT INTO forward_returns SELECT signal_id, horizon_s, ret, computed_at FROM forward_returns_old;
+        DROP TABLE forward_returns_old;
+        """
+    )
+
 
 _TABLES = frozenset(
     {
@@ -221,6 +243,7 @@ class Store:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(_SCHEMA)
+        await _migrate_forward_returns_nullable(db)
         await db.commit()
         self._db = db
 
@@ -327,7 +350,9 @@ class Store:
                 out.append(_signal_from_row(row))
         return out
 
-    async def insert_forward_return(self, signal_id: str, horizon_s: int, ret: float) -> None:
+    async def insert_forward_return(self, signal_id: str, horizon_s: int, ret: float | None) -> None:
+        """`ret=None` records the signal as unscorable for this horizon: it is no longer
+        returned by `signals_missing_forward_return` and is excluded from `effectiveness`."""
         await self._conn.execute(
             "INSERT OR REPLACE INTO forward_returns (signal_id, horizon_s, ret, computed_at) "
             "VALUES (?, ?, ?, ?)",
@@ -340,6 +365,7 @@ class Store:
             "SELECT s.detector AS detector, fr.horizon_s AS horizon_s, COUNT(*) AS n, "
             "AVG(fr.ret) AS mean_ret, AVG(fr.ret > 0) AS hit_rate "
             "FROM forward_returns fr JOIN signals s ON s.id = fr.signal_id "
+            "WHERE fr.ret IS NOT NULL "
             "GROUP BY s.detector, fr.horizon_s"
         )
         rows = await cur.fetchall()
@@ -364,8 +390,13 @@ class Store:
         await self._conn.commit()
 
     async def mark_at(self, symbol: str, ts: datetime, tolerance_s: int = 60) -> Decimal | None:
+        # Bounded scan. Samples are stored as UTC ISO strings, which sort chronologically;
+        # the window is widened by a second and re-checked exactly below.
+        lo = (ts - timedelta(seconds=tolerance_s + 1)).astimezone(UTC).isoformat()
+        hi = (ts + timedelta(seconds=tolerance_s + 1)).astimezone(UTC).isoformat()
         cur = await self._conn.execute(
-            "SELECT ts, price FROM mark_samples WHERE symbol = ?", (symbol,)
+            "SELECT ts, price FROM mark_samples WHERE symbol = ? AND ts BETWEEN ? AND ?",
+            (symbol, lo, hi),
         )
         rows = await cur.fetchall()
         best_price: str | None = None

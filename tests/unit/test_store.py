@@ -53,3 +53,45 @@ async def test_kv_and_orders_roundtrip(tmp_path):
     await st.update_order_status("ait-1", OrderStatus.FILLED, Decimal("0.002"), Decimal("79000"), 99)  # noqa: FURB157
     assert await st.open_protective_orders("BTCUSDT") == []
     await st.close()
+
+
+async def test_null_forward_return_is_sentinel(tmp_path):
+    st = Store(tmp_path / "t.db")
+    await st.open()
+    await st.insert_signal(make_signal("s1", created_at=T0))
+    await st.insert_signal(make_signal("s2", created_at=T0))
+    await st.insert_forward_return("s1", 600, None)
+    await st.insert_forward_return("s2", 600, 0.02)
+    assert await st.signals_missing_forward_return(600, before=T0 + timedelta(hours=1)) == []
+    rows = await st.effectiveness()
+    assert len(rows) == 1 and rows[0].n == 1 and abs(rows[0].mean_ret - 0.02) < 1e-12
+    await st.close()
+
+
+async def test_mark_at_bounded_window_with_fractional_seconds(tmp_path):
+    st = Store(tmp_path / "t.db")
+    await st.open()
+    await st.insert_mark_sample("BTCUSDT", T0 - timedelta(seconds=61), Decimal(1))
+    await st.insert_mark_sample("BTCUSDT", T0 + timedelta(seconds=59, microseconds=500000), Decimal(2))
+    await st.insert_mark_sample("ETHUSDT", T0, Decimal(3))
+    assert await st.mark_at("BTCUSDT", T0) == Decimal(2)
+    assert await st.mark_at("BTCUSDT", T0 + timedelta(seconds=200)) is None
+    await st.close()
+
+
+async def test_open_migrates_not_null_forward_returns(tmp_path):
+    import aiosqlite
+
+    path = tmp_path / "old.db"
+    async with aiosqlite.connect(path) as db:
+        await db.execute(
+            "CREATE TABLE forward_returns (signal_id TEXT NOT NULL, horizon_s INTEGER NOT NULL, "
+            "ret REAL NOT NULL, computed_at TEXT NOT NULL, PRIMARY KEY (signal_id, horizon_s))"
+        )
+        await db.commit()
+    st = Store(path)
+    await st.open()
+    await st.insert_signal(make_signal("s1", created_at=T0))
+    await st.insert_forward_return("s1", 600, None)
+    assert await st.effectiveness() == []
+    await st.close()

@@ -54,3 +54,27 @@ def test_cli_kill_paper_sets_flag_and_status_shows_it(tmp_path, monkeypatch):
     asyncio.run(_seed(tmp_path / "z.db"))
     r = CliRunner().invoke(app, ["status"])
     assert r.exit_code == 0 and "ACTIVE" in r.output and "funding_extreme" in r.output
+
+
+def test_cli_kill_live_sets_flag_even_when_rest_fails(tmp_path, monkeypatch):
+    import httpx
+    import respx
+
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "k.db"))
+    monkeypatch.setenv("MODE", "live")
+    monkeypatch.setenv("BINANCE_API_KEY", "k")
+    monkeypatch.setenv("BINANCE_API_SECRET", "s")
+    with respx.mock(assert_all_called=False) as mock:
+        mock.route().mock(side_effect=httpx.ConnectError("down"))
+        r = CliRunner().invoke(app, ["kill"])
+    assert r.exit_code == 1 and "flatten NOT run" in r.output and "flattened" not in r.output
+
+    async def _flag():
+        st = Store(tmp_path / "k.db")
+        await st.open()
+        try:
+            return await st.get_kv("kill_switch")
+        finally:
+            await st.close()
+
+    assert asyncio.run(_flag()) == "1"

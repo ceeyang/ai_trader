@@ -4,7 +4,10 @@
 `ret = (p1 - ref_price) / ref_price * sign(direction)`, so a correct BEARISH call on a
 falling price is a positive return. Signals whose horizon has not elapsed yet, or for
 which no mark sample lies within the store's tolerance of `created_at + horizon`, are
-skipped and retried on the next tick.
+skipped and retried on the next tick; once `GIVE_UP_AFTER_S` has passed beyond the
+horizon with still no sample (e.g. the process was down), a NULL sentinel is written so
+the signal is not re-fetched forever. NEUTRAL signals carry no direction to score and get
+the sentinel straight away.
 """
 
 import asyncio
@@ -20,7 +23,8 @@ from ai_trader.storage.db import Store
 
 log = logging.getLogger(__name__)
 
-_SIGN = {Direction.BULLISH: 1, Direction.BEARISH: -1, Direction.NEUTRAL: 0}
+_SIGN = {Direction.BULLISH: 1, Direction.BEARISH: -1}
+GIVE_UP_AFTER_S = 600
 
 
 class ForwardReturnTracker:
@@ -48,10 +52,18 @@ class ForwardReturnTracker:
             # `signals_missing_forward_return` keeps signals with `created_at + h <= before`,
             # so `before` is "now": only horizons that have fully elapsed are due.
             for s in await self._store.signals_missing_forward_return(h, before=now):
-                p1 = await self._store.mark_at(s.symbol, s.created_at + timedelta(seconds=h))
-                if p1 is None or s.ref_price == 0:
+                sign = _SIGN.get(s.direction)
+                if sign is None or s.ref_price == 0:
+                    await self._store.insert_forward_return(s.id, h, None)
                     continue
-                ret = float((p1 - s.ref_price) / s.ref_price) * _SIGN[s.direction]
+                target = s.created_at + timedelta(seconds=h)
+                p1 = await self._store.mark_at(s.symbol, target)
+                if p1 is None:
+                    if now > target + timedelta(seconds=GIVE_UP_AFTER_S):
+                        log.info("forward return %s@%ss unscorable (no mark sample); giving up", s.id, h)
+                        await self._store.insert_forward_return(s.id, h, None)
+                    continue
+                ret = float((p1 - s.ref_price) / s.ref_price) * sign
                 await self._store.insert_forward_return(s.id, h, ret)
                 written += 1
         return written

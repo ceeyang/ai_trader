@@ -184,7 +184,10 @@ def _today_utc_midnight():
 
 
 async def _kill() -> None:
+    import httpx
+
     from ai_trader.bus import EventBus
+    from ai_trader.exchange.binance.errors import BinanceError
     from ai_trader.exchange.binance.rest import BinanceFuturesRest
     from ai_trader.execution.binance import BinanceFuturesBroker
     from ai_trader.risk.kill_switch import KillSwitch
@@ -195,27 +198,35 @@ async def _kill() -> None:
     store = Store(s.db_path)
     await store.open()
     try:
+        # Persist the flag first: whatever happens to the flatten below, the running
+        # process rejects every new entry from now on.
+        await store.set_kv("kill_switch", "1")
         if s.mode == "paper":
-            await store.set_kv("kill_switch", "1")
             print(
                 "kill switch set (paper mode): the running process rejects new entries from now on; "
                 "paper positions live in that process and close via their stops or max-hold."
             )
             return
+        print("kill switch flag set; flattening live positions...")
         key = s.binance_api_key.get_secret_value() if s.binance_api_key else None
         secret = s.binance_api_secret.get_secret_value() if s.binance_api_secret else None
         if not (key and secret):
-            await store.set_kv("kill_switch", "1")
-            print("kill switch set, but no BINANCE_API_KEY/BINANCE_API_SECRET: cannot flatten positions")
+            print("flatten NOT run: no BINANCE_API_KEY/BINANCE_API_SECRET configured")
             raise typer.Exit(1)
         rest = BinanceFuturesRest(s.effective_rest_url, key, secret)
         try:
+            await rest.sync_time()
             info = await rest.exchange_info()
             bus = EventBus()
             broker = BinanceFuturesBroker(rest, info, bus, s.effective_ws_url)
             await broker.refresh_positions()
+        except (BinanceError, httpx.HTTPError) as exc:
+            print(f"flatten NOT run: REST setup failed ({type(exc).__name__}); positions may still be open")
+            raise typer.Exit(1) from None
+        else:
+            # KillSwitch.trigger tolerates per-symbol failures and logs them.
             await KillSwitch(store, broker, bus).trigger("manual kill via CLI")
-            print("kill switch triggered: positions flattened and open orders cancelled (see log for failures)")
+            print("kill switch triggered: flatten sweep ran over all positions and open orders (see log for failures)")
         finally:
             await rest.aclose()
     finally:

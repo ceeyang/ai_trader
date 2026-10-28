@@ -80,3 +80,53 @@ async def test_app_restarts_crashed_component(tmp_path, exchange_info, caplog):
     assert "restarting" in caplog.text
     await app.stop()
     await asyncio.wait_for(task, 5)
+
+
+async def test_create_components_live_mode_syncs_time(tmp_path, exchange_info):
+    from ai_trader.execution.binance import BinanceFuturesBroker
+
+    class CountingRest(FakeRest):
+        sync_calls = 0
+
+        async def sync_time(self) -> int:
+            self.sync_calls += 1
+            return 0
+
+    s = Settings(_env_file=None, mode="live", db_path=tmp_path / "a.db", llm=LLMConfig(enabled=False),
+                 binance_api_key="k", binance_api_secret="s")
+    rest = CountingRest(exchange_info)
+    http = _http()
+    c = await create_components(s, rest=rest, ws_factory=fake_ws_factory, http=http)
+    assert isinstance(c.broker, BinanceFuturesBroker) and rest.sync_calls == 1
+    await http.aclose()
+
+
+async def test_create_components_closes_own_clients_on_failure(tmp_path, monkeypatch):
+    import pytest
+
+    import ai_trader.app as app_mod
+
+    created: list[httpx.AsyncClient] = []
+    real_client = httpx.AsyncClient
+
+    def _client(*a, **kw):
+        client = real_client(transport=httpx.MockTransport(lambda r: httpx.Response(404)))
+        created.append(client)
+        return client
+
+    class BrokenRest:
+        closed = False
+
+        async def exchange_info(self):
+            raise RuntimeError("exchange down")
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(app_mod.httpx, "AsyncClient", _client)
+    s = Settings(_env_file=None, mode="paper", db_path=tmp_path / "a.db", llm=LLMConfig(enabled=False))
+    rest = BrokenRest()
+    with pytest.raises(RuntimeError, match="exchange down"):
+        await create_components(s, rest=rest)
+    assert created and created[0].is_closed
+    assert rest.closed is False  # injected: the caller owns it
