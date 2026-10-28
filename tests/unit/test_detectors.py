@@ -76,11 +76,16 @@ async def test_funding_detector_rereads_cfg_at_call_time():
 
 async def test_liquidation_detector_rereads_cfg_at_call_time():
     """Same live-mutation requirement as above, for the liquidation detector's
-    threshold."""
-    cfg = DetectorConfig(liquidation_notional_threshold_usdt=Decimal("1000"))  # noqa: FURB157
+    threshold. Values are chosen so the second call's cumulative notional (700)
+    clears the *new* threshold (500) but not the *old* one (1000): a detector that
+    cached the threshold at construction would still return `[]` here, so this
+    discriminates live re-reading from a construction-time cache."""
+    cfg = DetectorConfig(liquidation_notional_threshold_usdt=Decimal(1000))
     det = LiquidationBurstDetector(cfg, MarketState(), clock=lambda: 0.0)
-    liq = make_liq(Side.SELL, price=Decimal("100"), qty=Decimal("6"))  # notional 600 < 1000  # noqa: FURB157
-    assert await det.on_event(liq) == []
-    cfg.liquidation_notional_threshold_usdt = Decimal("100")  # noqa: FURB157
-    sigs = await det.on_event(liq)  # cumulative 1200 >= new threshold 100
+    liq1 = make_liq(Side.SELL, price=Decimal(100), qty=Decimal(6))  # notional 600 < 1000
+    assert await det.on_event(liq1) == []
+    cfg.liquidation_notional_threshold_usdt = Decimal(500)
+    liq2 = make_liq(Side.SELL, price=Decimal(100), qty=Decimal(1))  # notional 100, cumulative 700
+    sigs = await det.on_event(liq2)  # 700 >= new threshold 500, but < stale threshold 1000
     assert sigs and sigs[0].direction == Direction.BULLISH
+    assert abs(sigs[0].strength - 0.7) < 1e-9  # 700 / (2 * 500)
