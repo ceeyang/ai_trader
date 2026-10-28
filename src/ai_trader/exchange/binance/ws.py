@@ -1,6 +1,7 @@
 """WebSocket client for Binance USDT-M futures market/user data streams (design 5.4)."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -40,6 +41,7 @@ class BinanceFuturesWS:
         self._connect = connect
         self._clock = clock
         self._stopped = False
+        self._stop_event = asyncio.Event()
         self._conn: object | None = None
         self.last_message_at: float | None = None
         self.reconnects = 0
@@ -52,8 +54,17 @@ class BinanceFuturesWS:
                 async with self._connect(self._url) as conn:
                     self._conn = conn
                     backoff_i = 0  # a successful connection resets the backoff index
+                    if self._stopped:
+                        # stop() landed during the connect handshake, while self._conn
+                        # was still None for it to close; closing `conn` here (via the
+                        # `async with` exit below) is what makes that race safe.
+                        break
                     async for raw in conn:
-                        msg = json.loads(raw)
+                        try:
+                            msg = json.loads(raw)
+                        except Exception:
+                            log.exception("Binance WS received a malformed frame, skipping")
+                            continue
                         self.last_message_at = self._clock()
                         try:
                             await self._handler(msg.get("data", msg))
@@ -70,9 +81,13 @@ class BinanceFuturesWS:
             sleep_s = self._backoff_s[min(backoff_i, len(self._backoff_s) - 1)]
             self.reconnects += 1
             backoff_i += 1
-            await asyncio.sleep(sleep_s)
+            # Interruptible sleep: stop() sets _stop_event so this returns immediately
+            # instead of blocking for the full backoff delay (up to 30s by default).
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
 
     async def stop(self) -> None:
         self._stopped = True
+        self._stop_event.set()
         if self._conn is not None:
             await self._conn.close()
