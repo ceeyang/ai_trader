@@ -58,6 +58,7 @@ async def test_runner_persists_then_publishes(tmp_path):
     await bus.drain()
     await bus.stop()
     assert len(got) == 1 and (await st.recent_signals(5))[0].id == "z"
+    await st.close()
 
 
 async def test_funding_detector_rereads_cfg_at_call_time():
