@@ -33,3 +33,16 @@ async def test_overflow_drops_oldest_and_counts():
     bus.subscribe(A, never, maxsize=2)
     for _ in range(5): bus.publish(A())
     assert sum(bus.dropped.values()) == 3
+
+async def test_late_subscription_after_start_gets_a_worker():
+    bus = EventBus(); got = []
+    await bus.start()
+    bus.subscribe(A, lambda e: _append(got, e))  # subscribed after start()
+    bus.publish(A())
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await bus.drain()
+    elapsed = loop.time() - t0
+    await bus.stop()
+    assert len(got) == 1
+    assert elapsed < 0.5  # must not fall back to drain()'s 2.0s timeout

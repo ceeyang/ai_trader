@@ -24,6 +24,7 @@ class EventBus:
     def __init__(self) -> None:
         self._subs: list[_Subscription] = []
         self.dropped: dict[str, int] = {}
+        self._started = False
 
     def subscribe(
         self,
@@ -32,9 +33,14 @@ class EventBus:
         *,
         maxsize: int = 10_000,
     ) -> None:
-        self._subs.append(
-            _Subscription(event_type=event_type, handler=handler, queue=asyncio.Queue(maxsize=maxsize))
-        )
+        sub = _Subscription(event_type=event_type, handler=handler, queue=asyncio.Queue(maxsize=maxsize))
+        self._subs.append(sub)
+        # A subscription registered after start() has already run its initial sweep
+        # would otherwise sit forever with a queue but no worker consuming it; give
+        # late subscribers a worker immediately so `publish`+`drain` works regardless
+        # of subscribe/start ordering. `stop()` cancels it like any other.
+        if self._started:
+            sub.task = asyncio.create_task(self._worker(sub))
 
     def publish(self, event: object) -> None:
         for sub in self._subs:
@@ -49,10 +55,13 @@ class EventBus:
                 self.dropped[key] = self.dropped.get(key, 0) + 1
 
     async def start(self) -> None:
+        self._started = True
         for sub in self._subs:
-            sub.task = asyncio.create_task(self._worker(sub))
+            if sub.task is None:
+                sub.task = asyncio.create_task(self._worker(sub))
 
     async def stop(self) -> None:
+        self._started = False
         for sub in self._subs:
             if sub.task is not None:
                 sub.task.cancel()

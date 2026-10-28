@@ -147,6 +147,10 @@ async def test_entry_threshold_read_at_call_time(bus, st):
 
 
 async def test_start_subscribes_and_backfills_last_decision_at(bus, st):
+    # bus.subscribe() (via EventBus's late-subscription fix) spawns a worker
+    # immediately even though `bus.start()` already ran, so this genuinely proves
+    # on_signal executes through the subscription registered by agg.start() -- not
+    # just that nothing crashed while a handler sat uninvoked.
     await st.insert_decision(
         Decision(
             id="prev",
@@ -165,9 +169,53 @@ async def test_start_subscribes_and_backfills_last_decision_at(bus, st):
     got = []
     bus.subscribe(Decision, lambda d: _append(got, d))
     await bus.start()
-    t = [T0.timestamp() + 100]  # within cooldown of the backfilled decision
+
+    t = [T0.timestamp() + 10]  # within cooldown_s=900 of the backfilled decision
     agg = make_agg(bus, st, clock=lambda: t[0])
     await agg.start()
-    bus.publish(make_signal("x", strength=0.9, created_at=T0, expires_at=T0 + timedelta(hours=4)))
+
+    bus.publish(
+        make_signal("x", detector="news_sentiment", strength=0.9, created_at=T0, expires_at=T0 + timedelta(hours=4))
+    )
     await bus.drain()
-    assert got == []  # still in cooldown, so start() must have backfilled _last_decision_at
+    # on_signal actually ran: the signal was appended to the aggregator's state.
+    assert [s.id for s in agg._signals.get("BTCUSDT", [])] == ["x"]
+    # ... yet no Decision was published: the backfilled cooldown blocked it, even
+    # though the score (~0.9) clears entry_threshold (0.6) on its own.
+    assert got == []
+
+    t[0] = T0.timestamp() + 900  # cooldown_s elapsed since the backfilled decision
+    bus.publish(
+        make_signal("y", detector="news_sentiment", strength=0.9, created_at=T0, expires_at=T0 + timedelta(hours=4))
+    )
+    await bus.drain()
+    assert len(got) == 1 and got[0].intent == Intent.OPEN
+
+
+async def test_close_decision_also_sets_cooldown(bus, st):
+    pos = {"BTCUSDT": make_position(PositionSide.LONG, Decimal("0.002"), Decimal("80000"))}  # noqa: FURB157
+    agg = make_agg(bus, st, positions=pos)
+    closed = await agg.on_signal(
+        make_signal(
+            "a",
+            detector="news_sentiment",
+            direction=Direction.BEARISH,
+            strength=0.5,
+            created_at=T0,
+            expires_at=T0 + timedelta(hours=1),
+        )
+    )
+    assert closed is not None and closed.intent == Intent.CLOSE
+
+    # A fresh aggregator (simulating a later process that only has the store, and
+    # whose view of positions() shows none -- as it would be after a real close) is
+    # still blocked from opening within cooldown_s of the CLOSE.
+    blocked = await make_agg(bus, st, clock=lambda: T0.timestamp() + 1).on_signal(
+        make_signal("b", detector="news_sentiment", strength=0.9, created_at=T0, expires_at=T0 + timedelta(hours=4))
+    )
+    assert blocked is None
+
+    opened = await make_agg(bus, st, clock=lambda: T0.timestamp() + 900).on_signal(
+        make_signal("c", detector="news_sentiment", strength=0.9, created_at=T0, expires_at=T0 + timedelta(hours=4))
+    )
+    assert opened is not None and opened.intent == Intent.OPEN
