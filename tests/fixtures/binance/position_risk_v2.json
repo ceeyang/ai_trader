@@ -1,0 +1,38 @@
+[
+  {
+    "entryPrice": "80950.10000",
+    "breakEvenPrice": "80917.71996",
+    "marginType": "isolated",
+    "isAutoAddMargin": "false",
+    "isolatedMargin": "81.01850000",
+    "leverage": "2",
+    "liquidationPrice": "121010.37000000",
+    "markPrice": "80876.26033380",
+    "maxNotionalValue": "300000000",
+    "positionAmt": "-0.002",
+    "notional": "-161.75252066",
+    "isolatedWallet": "80.87082000",
+    "symbol": "BTCUSDT",
+    "unRealizedProfit": "0.14767933",
+    "positionSide": "BOTH",
+    "updateTime": 1793217600000
+  },
+  {
+    "entryPrice": "0.0",
+    "breakEvenPrice": "0.0",
+    "marginType": "isolated",
+    "isAutoAddMargin": "false",
+    "isolatedMargin": "0.00000000",
+    "leverage": "2",
+    "liquidationPrice": "0",
+    "markPrice": "3912.45000000",
+    "maxNotionalValue": "250000000",
+    "positionAmt": "0.000",
+    "notional": "0",
+    "isolatedWallet": "0",
+    "symbol": "ETHUSDT",
+    "unRealizedProfit": "0.00000000",
+    "positionSide": "BOTH",
+    "updateTime": 0
+  }
+]

@@ -1,0 +1,170 @@
+"""Pure functions turning raw Binance payloads into domain models (design 5.4)."""
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+from ai_trader.exchange.binance.filters import ExchangeInfo, SymbolFilters
+from ai_trader.models import (
+    AccountState,
+    Kline,
+    MarkPrice,
+    OrderResult,
+    OrderStatus,
+    OrderType,
+    Position,
+    PositionSide,
+    Side,
+    utc_now,
+)
+
+
+def _ms(ms: int | str) -> datetime:
+    return datetime.fromtimestamp(int(ms) / 1000, UTC)
+
+
+def _dec(value: Any) -> Decimal:
+    return Decimal(str(value))
+
+
+def _dec_or_none(value: Any) -> Decimal | None:
+    """Decimal, or None when the field is missing or zero (Binance's "unset")."""
+    if value is None or value == "":
+        return None
+    d = _dec(value)
+    return None if d == 0 else d
+
+
+def _bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.lower() == "true"
+    return bool(value)
+
+
+# ---- REST -------------------------------------------------------------------
+
+
+def parse_exchange_info(raw: dict) -> ExchangeInfo:
+    """Keep only PERPETUAL contracts in TRADING status."""
+    symbols: dict[str, SymbolFilters] = {}
+    for s in raw.get("symbols", []):
+        if s.get("contractType") != "PERPETUAL" or s.get("status") != "TRADING":
+            continue
+        by_type = {f["filterType"]: f for f in s.get("filters", [])}
+        price_f = by_type["PRICE_FILTER"]
+        lot_f = by_type["LOT_SIZE"]
+        notional_f = by_type.get("MIN_NOTIONAL", {})
+        symbols[s["symbol"]] = SymbolFilters(
+            symbol=s["symbol"],
+            tick_size=_dec(price_f["tickSize"]),
+            step_size=_dec(lot_f["stepSize"]),
+            min_qty=_dec(lot_f["minQty"]),
+            max_qty=_dec(lot_f["maxQty"]),
+            min_notional=_dec(notional_f.get("notional", "0")),
+            price_precision=int(s["pricePrecision"]),
+            quantity_precision=int(s["quantityPrecision"]),
+        )
+    return ExchangeInfo(symbols=symbols)
+
+
+def parse_rest_premium_index(raw: dict) -> MarkPrice:
+    """GET /fapi/v1/premiumIndex (single symbol)."""
+    return MarkPrice(
+        symbol=raw["symbol"],
+        mark_price=_dec(raw["markPrice"]),
+        index_price=_dec(raw["indexPrice"]),
+        funding_rate=_dec(raw["lastFundingRate"]),
+        next_funding_time=_ms(raw["nextFundingTime"]),
+        event_time=_ms(raw["time"]),
+    )
+
+
+def parse_rest_kline(row: list, *, symbol: str, interval: str) -> Kline:
+    """One row of GET /fapi/v1/klines: [openTime, o, h, l, c, v, closeTime, ...]."""
+    close_time = _ms(row[6])
+    return Kline(
+        symbol=symbol,
+        interval=interval,
+        open_time=_ms(row[0]),
+        close_time=close_time,
+        open=_dec(row[1]),
+        high=_dec(row[2]),
+        low=_dec(row[3]),
+        close=_dec(row[4]),
+        volume=_dec(row[5]),
+        is_closed=close_time < utc_now(),
+    )
+
+
+def parse_rest_order(raw: dict) -> OrderResult:
+    """Order payload from POST/GET/DELETE /fapi/v1/order and GET /fapi/v1/openOrders."""
+    return OrderResult(
+        order_id=int(raw["orderId"]),
+        client_order_id=raw["clientOrderId"],
+        symbol=raw["symbol"],
+        side=Side(raw["side"]),
+        type=OrderType(raw.get("origType") or raw["type"]),
+        status=OrderStatus(raw["status"]),
+        orig_qty=_dec(raw["origQty"]),
+        executed_qty=_dec(raw["executedQty"]),
+        avg_price=_dec(raw.get("avgPrice", "0")),
+        stop_price=_dec_or_none(raw.get("stopPrice")),
+        reduce_only=_bool(raw.get("reduceOnly", False)),
+        close_position=_bool(raw.get("closePosition", False)),
+        update_time=_ms(raw["updateTime"]),
+    )
+
+
+def _side_and_qty(position_amt: Any) -> tuple[PositionSide, Decimal]:
+    amt = _dec(position_amt)
+    if amt > 0:
+        return PositionSide.LONG, amt
+    if amt < 0:
+        return PositionSide.SHORT, -amt
+    return PositionSide.FLAT, Decimal(0)
+
+
+def parse_rest_position(raw: dict) -> Position:
+    """One entry of GET /fapi/v2/positionRisk (one-way mode)."""
+    side, qty = _side_and_qty(raw["positionAmt"])
+    return Position(
+        symbol=raw["symbol"],
+        side=side,
+        quantity=qty,
+        entry_price=_dec(raw["entryPrice"]),
+        mark_price=_dec(raw["markPrice"]),
+        unrealized_pnl=_dec(raw["unRealizedProfit"]),
+        leverage=int(raw["leverage"]),
+        liquidation_price=_dec_or_none(raw.get("liquidationPrice")),
+    )
+
+
+def _parse_account_position(raw: dict) -> Position:
+    # /fapi/v2/account positions carry no markPrice / liquidationPrice:
+    # mark price is derived from |notional| / |positionAmt|.
+    side, qty = _side_and_qty(raw["positionAmt"])
+    mark = abs(_dec(raw.get("notional", "0"))) / qty if qty else Decimal(0)
+    return Position(
+        symbol=raw["symbol"],
+        side=side,
+        quantity=qty,
+        entry_price=_dec(raw["entryPrice"]),
+        mark_price=mark,
+        unrealized_pnl=_dec(raw["unrealizedProfit"]),
+        leverage=int(raw["leverage"]),
+        liquidation_price=None,
+    )
+
+
+def parse_rest_account(raw: dict) -> AccountState:
+    """GET /fapi/v2/account. Only non-zero positions are kept."""
+    positions = [
+        _parse_account_position(p) for p in raw.get("positions", []) if _dec(p["positionAmt"]) != 0
+    ]
+    return AccountState(
+        total_wallet_balance=_dec(raw["totalWalletBalance"]),
+        available_balance=_dec(raw["availableBalance"]),
+        total_unrealized_pnl=_dec(raw["totalUnrealizedProfit"]),
+        positions=positions,
+        updated_at=utc_now(),
+    )
