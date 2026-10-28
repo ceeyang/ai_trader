@@ -7,7 +7,10 @@ from typing import Any
 from ai_trader.exchange.binance.filters import ExchangeInfo, SymbolFilters
 from ai_trader.models import (
     AccountState,
+    AccountUpdate,
+    Fill,
     Kline,
+    Liquidation,
     MarkPrice,
     OrderResult,
     OrderStatus,
@@ -168,3 +171,118 @@ def parse_rest_account(raw: dict) -> AccountState:
         positions=positions,
         updated_at=utc_now(),
     )
+
+
+# ---- WebSocket streams -------------------------------------------------------
+
+
+def parse_mark_price(d: dict) -> MarkPrice:
+    """markPriceUpdate stream payload."""
+    return MarkPrice(
+        symbol=d["s"],
+        mark_price=_dec(d["p"]),
+        index_price=_dec(d["i"]),
+        funding_rate=_dec(d["r"]),
+        next_funding_time=_ms(d["T"]),
+        event_time=_ms(d["E"]),
+    )
+
+
+def parse_kline(d: dict) -> Kline:
+    """kline stream payload (the nested `k` object)."""
+    k = d["k"]
+    return Kline(
+        symbol=k["s"],
+        interval=k["i"],
+        open_time=_ms(k["t"]),
+        close_time=_ms(k["T"]),
+        open=_dec(k["o"]),
+        high=_dec(k["h"]),
+        low=_dec(k["l"]),
+        close=_dec(k["c"]),
+        volume=_dec(k["v"]),
+        is_closed=_bool(k["x"]),
+    )
+
+
+def parse_force_order(d: dict) -> Liquidation:
+    """forceOrder stream payload (the nested `o` object)."""
+    o = d["o"]
+    return Liquidation(
+        symbol=o["s"],
+        side=Side(o["S"]),
+        price=_dec(o["p"]),
+        qty=_dec(o["q"]),
+        event_time=_ms(o["T"]),
+    )
+
+
+def parse_order_trade_update(d: dict) -> tuple[OrderResult, Fill | None]:
+    """ORDER_TRADE_UPDATE user-data payload. A Fill is only produced when the
+    execution type is TRADE and a non-zero quantity was just filled."""
+    o = d["o"]
+    side = Side(o["S"])
+    result = OrderResult(
+        order_id=int(o["i"]),
+        client_order_id=o["c"],
+        symbol=o["s"],
+        side=side,
+        type=OrderType(o.get("ot") or o["o"]),
+        status=OrderStatus(o["X"]),
+        orig_qty=_dec(o["q"]),
+        executed_qty=_dec(o["z"]),
+        avg_price=_dec(o.get("ap", "0")),
+        stop_price=_dec_or_none(o.get("sp")),
+        reduce_only=_bool(o.get("R", False)),
+        close_position=_bool(o.get("cp", False)),
+        update_time=_ms(d["T"]),
+    )
+    last_qty = _dec(o.get("l", "0"))
+    fill = None
+    if o.get("x") == "TRADE" and last_qty > 0:
+        fill = Fill(
+            order_id=result.order_id,
+            client_order_id=result.client_order_id,
+            symbol=result.symbol,
+            side=side,
+            price=_dec(o["L"]),
+            qty=last_qty,
+            realized_pnl=_dec(o.get("rp", "0")),
+            commission=_dec(o.get("n", "0")),
+            event_time=_ms(d["T"]),
+        )
+    return result, fill
+
+
+def parse_account_update(d: dict) -> AccountUpdate:
+    """ACCOUNT_UPDATE user-data payload (the nested `a` object)."""
+    a = d["a"]
+    total_wallet_balance = sum((_dec(b["wb"]) for b in a.get("B", [])), start=Decimal(0))
+    available_balance = sum((_dec(b["cw"]) for b in a.get("B", [])), start=Decimal(0))
+    positions = []
+    total_unrealized_pnl = Decimal(0)
+    for p in a.get("P", []):
+        side, qty = _side_and_qty(p["pa"])
+        entry_price = _dec(p["ep"])
+        unrealized_pnl = _dec(p.get("up", "0"))
+        total_unrealized_pnl += unrealized_pnl
+        positions.append(
+            Position(
+                symbol=p["s"],
+                side=side,
+                quantity=qty,
+                entry_price=entry_price,
+                mark_price=entry_price,  # not carried in this message; placeholder
+                unrealized_pnl=unrealized_pnl,
+                leverage=0,  # not carried in this message
+                liquidation_price=None,
+            )
+        )
+    state = AccountState(
+        total_wallet_balance=total_wallet_balance,
+        available_balance=available_balance,
+        total_unrealized_pnl=total_unrealized_pnl,
+        positions=positions,
+        updated_at=_ms(d["E"]),
+    )
+    return AccountUpdate(state=state)
