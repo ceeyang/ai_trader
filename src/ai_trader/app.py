@@ -2,10 +2,10 @@
 
 `create_components` builds every component with its real constructor so tests can inject
 fakes (`rest`, `ws_factory`, `http`, `store`). `App.run()` opens the store, starts the bus,
-broker, aggregator and execution service, then runs every long-lived component under a
-supervisor in one `asyncio.TaskGroup`: a component that raises is logged and restarted
-with backoff, so one crashing component never takes the process down. `App.stop()` stops
-everything in reverse order and is idempotent.
+broker, aggregator and execution service, then runs every long-lived component
+(including the AutoTuner) under a supervisor in one `asyncio.TaskGroup`: a component that
+raises is logged and restarted with backoff, so one crashing component never takes the
+process down. `App.stop()` stops everything in reverse order and is idempotent.
 """
 
 import asyncio
@@ -43,6 +43,7 @@ from ai_trader.risk.kill_switch import KillSwitch
 from ai_trader.settings import Settings
 from ai_trader.storage.db import Store
 from ai_trader.strategy.aggregator import SignalAggregator
+from ai_trader.strategy.autotune import AutoTuner
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class Components:
     kill_switch: KillSwitch
     execution: ExecutionService
     tracker: ForwardReturnTracker
+    tuner: AutoTuner
 
 
 def _secret(value) -> str | None:
@@ -185,6 +187,8 @@ async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, s
     aggregator = SignalAggregator(bus, store, state, settings.strategy, positions=broker.positions_snapshot)
     execution = ExecutionService(bus, broker, risk, store, settings, state=state)
     tracker = ForwardReturnTracker(store, state)
+    # Same config objects the aggregator/detectors/execution read; RiskLimits is never passed.
+    tuner = AutoTuner(store, settings.strategy, settings.detectors)
 
     return Components(
         settings=settings,
@@ -205,6 +209,7 @@ async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, s
         kill_switch=kill_switch,
         execution=execution,
         tracker=tracker,
+        tuner=tuner,
     )
 
 
@@ -239,6 +244,7 @@ class App:
             ("poller", lambda: c.poller.run()),
             ("execution", lambda: c.execution.run()),
             ("tracker", lambda: c.tracker.run()),
+            ("tuner", lambda: c.tuner.run()),
             ("health", self._health_loop),
         ]
 
@@ -297,6 +303,7 @@ class App:
             ("poller", c.poller),
             ("execution", c.execution),
             ("tracker", c.tracker),
+            ("tuner", c.tuner),
         ):
             try:
                 await comp.stop()

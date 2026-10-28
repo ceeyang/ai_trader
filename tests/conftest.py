@@ -211,6 +211,40 @@ def make_decision(
     )
 
 
+def make_decision_model(
+    *,
+    created_at: datetime = T0,
+    symbol: str = "BTCUSDT",
+    side: Side = Side.BUY,
+    intent: Intent = Intent.OPEN,
+) -> Decision:
+    """A `Decision` with the given `created_at` (unique id each call)."""
+    return make_decision(symbol=symbol, side=side, intent=intent).model_copy(update={"created_at": created_at})
+
+
+async def seed_effectiveness(
+    st: Store, detector: str, *, horizon_s: int, n: int, hit_rate: float, mean_ret: float
+) -> None:
+    """Insert `n` signals for `detector` plus their `horizon_s` forward returns so that
+    `st.effectiveness()` reports `n`, a hit rate of `round(n*hit_rate)/n` and `mean_ret`:
+    `k = round(n*hit_rate)` positive returns, the rest negative, averaging `mean_ret`."""
+    k = round(n * hit_rate)
+    if k in (0, n):
+        if (k == 0 and mean_ret >= 0) or (k == n and mean_ret <= 0):
+            raise ValueError("mean_ret incompatible with an all-negative/all-positive sample")
+        rets = [mean_ret] * n
+    else:
+        spread = (abs(mean_ret) + 0.01) * n
+        pos = mean_ret + spread * (n - k) / k
+        neg = mean_ret - spread
+        rets = [pos] * k + [neg] * (n - k)
+    created = T0 - timedelta(days=2)  # old enough not to count as recent activity
+    for i, ret in enumerate(rets):
+        sid = f"seed-{detector}-{horizon_s}-{i}-{new_id()}"
+        await st.insert_signal(make_signal(sid, detector=detector, created_at=created, expires_at=created))
+        await st.insert_forward_return(sid, horizon_s, ret)
+
+
 @pytest.fixture
 async def bus():
     b = EventBus()

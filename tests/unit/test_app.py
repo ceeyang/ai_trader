@@ -130,3 +130,28 @@ async def test_create_components_closes_own_clients_on_failure(tmp_path, monkeyp
         await create_components(s, rest=rest)
     assert created and created[0].is_closed
     assert rest.closed is False  # injected: the caller owns it
+
+
+async def test_create_components_wires_autotuner_to_shared_configs(tmp_path, exchange_info):
+    c = await _components(tmp_path, exchange_info)
+    assert c.tuner.strategy_cfg is c.settings.strategy and c.tuner.detector_cfg is c.settings.detectors
+    assert not any(v is c.settings.risk for v in vars(c.tuner).values())
+    await c.http.aclose()
+
+
+async def test_app_runs_autotuner_supervised(tmp_path, exchange_info):
+    c = await _components(tmp_path, exchange_info)
+    app = App(c)
+    task = asyncio.create_task(app.run())
+    for _ in range(200):
+        if c.store._db is not None and await c.store.tuning_log(1):
+            break
+        await asyncio.sleep(0.01)
+    snapshot = await c.store.get_kv("tuning_effective")
+    changes = await c.store.tuning_log(10)
+    await app.stop()
+    await asyncio.wait_for(task, 5)
+    assert snapshot is not None
+    # empty DB: the first tick's activity_floor relaxes the shared config the aggregator reads
+    assert {ch.rule for ch in changes} == {"activity_floor"}
+    assert c.settings.strategy.entry_threshold < 0.6

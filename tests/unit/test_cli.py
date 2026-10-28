@@ -78,3 +78,39 @@ def test_cli_kill_live_sets_flag_even_when_rest_fails(tmp_path, monkeypatch):
             await st.close()
 
     assert asyncio.run(_flag()) == "1"
+
+
+async def _seed_tuning(path):
+    from ai_trader.settings import DetectorConfig, StrategyConfig
+    from ai_trader.strategy.autotune import AutoTuner
+
+    st = Store(path)
+    await st.open()
+    await AutoTuner(st, StrategyConfig(), DetectorConfig(), clock=lambda: T0.timestamp()).tick()
+    await st.close()
+
+
+def test_cli_tuning_prints_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "t.db"))
+    asyncio.run(_seed_tuning(tmp_path / "t.db"))
+    r = CliRunner().invoke(app, ["tuning"])
+    assert r.exit_code == 0
+    assert "activity_floor" in r.output and "strategy.entry_threshold" in r.output and "35000" in r.output
+
+
+def test_cli_tuning_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "e.db"))
+    r = CliRunner().invoke(app, ["tuning"])
+    assert r.exit_code == 0 and "no tuning changes yet" in r.output
+
+
+def test_cli_status_prints_effective_parameters(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "s.db"))
+    monkeypatch.setenv("MODE", "paper")
+    r = CliRunner().invoke(app, ["status"])
+    assert r.exit_code == 0 and "configured defaults" in r.output and "entry_threshold=0.6" in r.output
+    asyncio.run(_seed_tuning(tmp_path / "s.db"))
+    r = CliRunner().invoke(app, ["status"])
+    assert r.exit_code == 0 and "effective (from running process)" in r.output
+    assert "entry_threshold=0.55" in r.output and "liquidation_notional_threshold_usdt=35000" in r.output
+    assert "cooldown_s=900" in r.output and "news_sentiment" in r.output

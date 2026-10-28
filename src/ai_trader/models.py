@@ -294,6 +294,17 @@ class AccountUpdate(_Frozen):
     state: AccountState
 
 
+class TuningChange(_Frozen):
+    """One parameter change made by the AutoTuner (design 5.12); `old`/`new` are `str()`s."""
+
+    ts: datetime
+    rule: str
+    field: str
+    old: str
+    new: str
+    reason: str
+
+
 # ---- id helpers -------------------------------------------------------
 
 

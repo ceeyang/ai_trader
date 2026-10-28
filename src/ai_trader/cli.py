@@ -239,6 +239,41 @@ def kill() -> None:
     asyncio.run(_kill())
 
 
+def _print_tuning_params(s, effective_json: str | None) -> None:
+    """Print the auto-tuned parameters: the running process's values from kv
+    `tuning_effective` when present, else this process's configured defaults."""
+    import json
+
+    if effective_json is not None:
+        eff = json.loads(effective_json)
+        print(f"tuned parameters - effective (from running process), as of {eff.get('ts', '?')}:")
+        strat, det = eff["strategy"], eff["detectors"]
+    else:
+        print("tuned parameters - configured defaults (no running process has published values yet):")
+        strat = {
+            "entry_threshold": s.strategy.entry_threshold,
+            "base_notional_usdt": str(s.strategy.base_notional_usdt),
+            "cooldown_s": s.strategy.cooldown_s,
+            "detector_weights": s.strategy.detector_weights,
+        }
+        det = {
+            "funding_annualized_threshold": str(s.detectors.funding_annualized_threshold),
+            "liquidation_notional_threshold_usdt": str(s.detectors.liquidation_notional_threshold_usdt),
+            "news_min_confidence": s.detectors.news_min_confidence,
+        }
+    print(
+        f"  entry_threshold={strat['entry_threshold']:g}  base_notional_usdt={strat['base_notional_usdt']}  "
+        f"cooldown_s={strat['cooldown_s']}"
+    )
+    weights = " ".join(f"{k}={v:g}" for k, v in sorted(strat["detector_weights"].items()))
+    print(f"  detector_weights: {weights}")
+    print(
+        f"  funding_annualized_threshold={det['funding_annualized_threshold']}  "
+        f"liquidation_notional_threshold_usdt={det['liquidation_notional_threshold_usdt']}  "
+        f"news_min_confidence={det['news_min_confidence']:g}"
+    )
+
+
 async def _status() -> None:
     from ai_trader.exchange.binance.errors import BinanceError
     from ai_trader.exchange.binance.rest import BinanceFuturesRest
@@ -256,6 +291,7 @@ async def _status() -> None:
         print(f"realized PnL today (UTC): {pnl} USDT")
         counts = [f"{t}={await store.count(t)}" for t in ("signals", "decisions", "orders", "fills", "news")]
         print("counts: " + " ".join(counts))
+        _print_tuning_params(s, await store.get_kv("tuning_effective"))
         signals = await store.recent_signals(10)
         print("last signals (UTC):")
         if not signals:
@@ -328,3 +364,31 @@ async def _signals() -> None:
 def signals() -> None:
     """Print signal effectiveness (forward returns per detector and horizon)."""
     asyncio.run(_signals())
+
+
+async def _tuning() -> None:
+    from ai_trader.settings import Settings
+    from ai_trader.storage.db import Store
+
+    s = Settings()
+    store = Store(s.db_path)
+    await store.open()
+    try:
+        rows = await store.tuning_log(50)
+    finally:
+        await store.close()
+    if not rows:
+        print("no tuning changes yet")
+        return
+    print(f"{'ts (UTC)':<19}  {'rule':<17} {'field':<45} {'old':>10} {'new':>10}  reason")
+    for r in rows:
+        print(
+            f"{r.ts.strftime('%Y-%m-%d %H:%M:%S'):<19}  {r.rule:<17} {r.field:<45} "
+            f"{r.old:>10} {r.new:>10}  {r.reason}"
+        )
+
+
+@app.command()
+def tuning() -> None:
+    """Print the last 50 AutoTuner parameter changes (newest first)."""
+    asyncio.run(_tuning())

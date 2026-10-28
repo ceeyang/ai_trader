@@ -26,6 +26,7 @@ from ai_trader.models import (
     Sentiment,
     Side,
     Signal,
+    TuningChange,
     new_id,
     utc_now,
 )
@@ -142,6 +143,19 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tuning_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    rule TEXT NOT NULL,
+    field TEXT NOT NULL,
+    old TEXT NOT NULL,
+    new TEXT NOT NULL,
+    reason TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at);
+CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions(created_at);
 """
 
 async def _migrate_forward_returns_nullable(db: aiosqlite.Connection) -> None:
@@ -178,6 +192,7 @@ _TABLES = frozenset(
         "orders",
         "fills",
         "kv",
+        "tuning_log",
     }
 )
 
@@ -583,6 +598,46 @@ class Store:
             (key, value),
         )
         await self._conn.commit()
+
+    # ---- auto-tuning (design 5.12) ----------------------------------------
+
+    async def insert_tuning_change(self, change: TuningChange) -> None:
+        await self._conn.execute(
+            "INSERT INTO tuning_log (ts, rule, field, old, new, reason) VALUES (?, ?, ?, ?, ?, ?)",
+            (change.ts.isoformat(), change.rule, change.field, change.old, change.new, change.reason),
+        )
+        await self._conn.commit()
+
+    async def tuning_log(self, limit: int) -> list[TuningChange]:
+        """The most recent `limit` tuning changes, newest first."""
+        cur = await self._conn.execute("SELECT * FROM tuning_log ORDER BY id DESC LIMIT ?", (limit,))
+        rows = await cur.fetchall()
+        return [
+            TuningChange(
+                ts=datetime.fromisoformat(r["ts"]),
+                rule=r["rule"],
+                field=r["field"],
+                old=r["old"],
+                new=r["new"],
+                reason=r["reason"],
+            )
+            for r in rows
+        ]
+
+    async def count_signals_since(self, ts: datetime) -> int:
+        return await self._count_since("signals", ts)
+
+    async def count_decisions_since(self, ts: datetime) -> int:
+        return await self._count_since("decisions", ts)
+
+    async def _count_since(self, table: str, ts: datetime) -> int:
+        # `created_at` is stored as a UTC ISO string, which sorts chronologically.
+        cur = await self._conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE created_at >= ?",
+            (ts.astimezone(UTC).isoformat(),),
+        )
+        row = await cur.fetchone()
+        return row[0]
 
     # ---- misc (beyond 5.10, used by later tasks' tests) ------------------
 
