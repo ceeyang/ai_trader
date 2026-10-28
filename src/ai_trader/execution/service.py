@@ -26,10 +26,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 
+import httpx
+
 from ai_trader.bus import EventBus
 from ai_trader.data.market_state import MarketState
-from ai_trader.exchange.binance.errors import FilterViolation
+from ai_trader.exchange.binance.errors import BinanceAPIError, BinanceConnectionError, FilterViolation
 from ai_trader.execution.broker import Broker
+from ai_trader.execution.paper import PaperBrokerError
 from ai_trader.models import (
     AccountState,
     Decision,
@@ -54,6 +57,9 @@ log = logging.getLogger(__name__)
 
 MAX_HOLD_CHECK_INTERVAL_S = 60
 _PROTECTIVE_ROLES = {OrderRole.STOP_LOSS, OrderRole.TAKE_PROFIT}
+_UNKNOWN_ORDER = -2011  # Binance: cancel of an order that no longer exists
+# Transport failures after which the order may still exist (and fill) on the exchange.
+_UNCONFIRMED = (BinanceConnectionError, httpx.TimeoutException)
 
 
 class _Risk(Protocol):
@@ -129,7 +135,7 @@ class ExecutionService:
     async def _open(self, d: Decision, verdict: RiskVerdict) -> None:
         symbol = d.symbol
         await self._broker.ensure_symbol_setup(symbol, self._settings.leverage, self._settings.margin_type)
-        notional = verdict.adjusted_notional or d.notional_usdt
+        notional = verdict.adjusted_notional if verdict.adjusted_notional is not None else d.notional_usdt
         mp = self._state.mark(symbol)
         if mp is None:
             log.warning("no mark price for %s; skipping OPEN decision %s", symbol, d.id)
@@ -150,6 +156,16 @@ class ExecutionService:
         self._awaiting_fill[req.client_order_id] = d
         try:
             res = await self._submit_recorded(req, OrderRole.ENTRY, d.id)
+        except _UNCONFIRMED as exc:
+            # The order may still reach the exchange and fill: stay in `_awaiting_fill` so
+            # its FILLED `OrderResult` from the user stream still places SL/TP.
+            log.error(
+                "entry order %s for decision %s unconfirmed (%s); waiting for a stream update",
+                req.client_order_id,
+                d.id,
+                exc,
+            )
+            return
         except Exception:
             self._awaiting_fill.pop(req.client_order_id, None)
             log.exception("entry order %s for decision %s failed", req.client_order_id, d.id)
@@ -216,25 +232,32 @@ class ExecutionService:
         return res
 
     async def _flatten_unprotected(self, symbol: str) -> None:
-        try:
-            await self._broker.cancel_all(symbol)
-        except Exception:
-            log.exception("cancel_all for unprotected %s failed", symbol)
-        try:
-            res = await self._broker.close_position(symbol)
-            if res is not None:
-                await self._store_close(symbol, res)
-        except Exception:
-            log.exception("close_position for unprotected %s failed", symbol)
-        self._entry_time.pop(symbol, None)
+        await self._cancel_and_close(symbol, None)
 
     async def _close(self, d: Decision) -> None:
-        symbol = d.symbol
-        await self._broker.cancel_all(symbol)
-        await self._mark_protective_canceled(symbol)
-        res = await self._broker.close_position(symbol)
+        await self._cancel_and_close(d.symbol, d.id)
+
+    async def _cancel_and_close(self, symbol: str, decision_id: str | None) -> None:
+        """Best-effort `cancel_all`, then always attempt `close_position`. Tracking in
+        `_entry_time` is dropped only once the close succeeded (or the account is flat);
+        on failure the symbol is marked overdue so the next `enforce_max_hold` pass
+        (within 60 s) publishes a fresh CLOSE decision and retries."""
+        try:
+            await self._broker.cancel_all(symbol)
+            await self._mark_protective_canceled(symbol)
+        except Exception:
+            log.exception("cancel_all for %s failed; closing anyway", symbol)
+        try:
+            res = await self._broker.close_position(symbol)
+        except Exception:
+            log.exception("close_position for %s failed; will retry", symbol)
+            held = self._entry_time.get(symbol)
+            self._entry_time[symbol] = _Held(
+                entered_at=held.entered_at if held is not None else self._clock(), max_hold_s=0
+            )
+            return
         if res is not None:
-            await self._store_close(symbol, res, d.id)
+            await self._store_close(symbol, res, decision_id)
         self._entry_time.pop(symbol, None)
 
     async def _store_close(self, symbol: str, res: OrderResult, decision_id: str | None = None) -> None:
@@ -287,6 +310,15 @@ class ExecutionService:
                 continue
             try:
                 await self._broker.cancel(symbol, sibling.client_order_id)
+            except (PaperBrokerError, BinanceAPIError) as exc:
+                if isinstance(exc, BinanceAPIError) and exc.code != _UNKNOWN_ORDER:
+                    log.exception(
+                        "canceling sibling %s of %s failed", sibling.client_order_id, client_order_id
+                    )
+                    continue
+                log.warning(
+                    "sibling %s of %s is already gone: %s", sibling.client_order_id, client_order_id, exc
+                )
             except Exception:
                 log.exception("canceling sibling %s of %s failed", sibling.client_order_id, client_order_id)
                 continue
