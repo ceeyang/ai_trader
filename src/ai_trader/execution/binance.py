@@ -95,7 +95,7 @@ class BinanceFuturesBroker:
 
     async def start(self) -> None:
         self._listen_key = await self._rest.create_listen_key()
-        self._adopt(await self._rest.position_risk())
+        await self.refresh_positions()
         self._ws = self._ws_factory(user_stream_url(self._ws_url, self._listen_key), self._on_user_message)
         self._tasks = [
             asyncio.create_task(self._ws.run(), name="binance-user-stream"),
@@ -172,6 +172,11 @@ class BinanceFuturesBroker:
         for p in remote:
             self._set_position(p)
 
+    async def refresh_positions(self) -> None:
+        """Replace the position cache with `positionRisk` from REST. `start()` does this;
+        a caller that never starts the user stream (e.g. `ai-trader kill`) calls it directly."""
+        self._adopt(await self._rest.position_risk())
+
     async def reconcile(self) -> None:
         remote = await self._rest.position_risk()
         remote_by_symbol = {p.symbol: p for p in remote if p.quantity > 0 and p.side != PositionSide.FLAT}
@@ -189,8 +194,12 @@ class BinanceFuturesBroker:
                 await self._kill(reason)
         self._adopt(remote)
 
-    async def positions(self) -> dict[str, Position]:
+    def positions_snapshot(self) -> dict[str, Position]:
+        """The ACCOUNT_UPDATE/reconcile-fed cache; no REST call."""
         return {s: p for s, p in self._positions.items() if p.quantity > 0}
+
+    async def positions(self) -> dict[str, Position]:
+        return self.positions_snapshot()
 
     async def account(self) -> AccountState:
         return await self._rest.account()

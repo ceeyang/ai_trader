@@ -138,3 +138,14 @@ async def test_close_position_submits_reduce_only_market(bus, state, exchange_in
 
 async def test_close_position_flat_returns_none(bus, state, exchange_info):
     pb = PaperBroker(state, bus, exchange_info); assert await pb.close_position("ETHUSDT") is None
+
+
+async def test_positions_snapshot_matches_positions(bus, state, exchange_info):
+    state.update_mark(make_mark_price(mark=Decimal(80000)))
+    pb = PaperBroker(state, bus, exchange_info, slippage_bps=0)
+    await pb.start()
+    assert pb.positions_snapshot() == {}
+    await pb.submit(OrderRequest(symbol="BTCUSDT", side=Side.SELL, type=OrderType.MARKET,
+                                 quantity=Decimal("0.002"), client_order_id="ait-s"))
+    snap = pb.positions_snapshot()
+    assert snap == await pb.positions() and snap["BTCUSDT"].side == PositionSide.SHORT

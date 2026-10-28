@@ -132,8 +132,11 @@ class PaperBroker:
             liquidation_price=None,
         )
 
-    async def positions(self) -> dict[str, Position]:
+    def positions_snapshot(self) -> dict[str, Position]:
         return {s: self._position(s, p) for s, p in self._positions.items() if p.qty != 0}
+
+    async def positions(self) -> dict[str, Position]:
+        return self.positions_snapshot()
 
     async def account(self) -> AccountState:
         positions = list((await self.positions()).values())

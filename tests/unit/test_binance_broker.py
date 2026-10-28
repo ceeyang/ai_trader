@@ -89,6 +89,7 @@ async def test_user_stream_fill_published_and_positions_updated(bus, exchange_in
     assert fills[0].client_order_id == "ait-abc" and (await br.positions())["BTCUSDT"].quantity == Decimal("0.002")
     assert results[0].client_order_id == "ait-abc" and results[0].status == OrderStatus.FILLED
     assert updates[0].state.total_wallet_balance == Decimal("10001.2")
+    assert br.positions_snapshot() == await br.positions() and "BTCUSDT" in br.positions_snapshot()
     await br.stop()
     assert close_lk.call_count == 1
 
@@ -154,3 +155,12 @@ async def test_close_position_and_open_order_symbols(bus, exchange_info):
     assert await br.close_position("ETHUSDT") is None
     assert post.call_count == 1
     assert await br.open_order_symbols() == {"BTCUSDT"}
+
+
+@respx.mock
+async def test_refresh_positions_without_start(bus, exchange_info):
+    respx.get(f"{BASE}/fapi/v2/positionRisk").mock(return_value=httpx.Response(200, json=fx("position_risk_v2.json")))
+    br = BinanceFuturesBroker(BinanceFuturesRest(BASE, "k", "s"), exchange_info, bus, "wss://x", ws_factory=fake_ws_factory)
+    assert br.positions_snapshot() == {}
+    await br.refresh_positions()
+    assert br.positions_snapshot()["BTCUSDT"].quantity == Decimal("0.002")

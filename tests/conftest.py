@@ -277,3 +277,23 @@ def fake_ws_factory(url, handler):
 
 
 fake_ws_factory.handlers = {}
+
+
+class FakeRest:
+    """Stands in for `BinanceFuturesRest` in wiring tests: no network."""
+
+    def __init__(self, exchange_info) -> None:
+        self._exchange_info = exchange_info
+        self.closed = False
+
+    async def exchange_info(self):
+        return self._exchange_info
+
+    async def sync_time(self) -> int:
+        return 0
+
+    async def premium_index(self, symbol: str) -> MarkPrice:
+        return make_mark_price(symbol=symbol)
+
+    async def aclose(self) -> None:
+        self.closed = True
