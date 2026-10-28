@@ -5,6 +5,9 @@ import pathlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
+from ai_trader.bus import EventBus
 from ai_trader.models import (
     AccountState,
     Decision,
@@ -24,6 +27,7 @@ from ai_trader.models import (
     Signal,
     new_id,
 )
+from ai_trader.storage.db import Store
 
 T0 = datetime(2026, 10, 29, tzinfo=UTC)
 
@@ -202,3 +206,19 @@ def make_decision(
         take_profit_pct=Decimal("0.02"),
         max_hold_s=3600,
     )
+
+
+@pytest.fixture
+async def bus():
+    b = EventBus()
+    await b.start()
+    yield b
+    await b.stop()
+
+
+@pytest.fixture
+async def st(tmp_path):
+    store = Store(tmp_path / "t.db")
+    await store.open()
+    yield store
+    await store.close()
