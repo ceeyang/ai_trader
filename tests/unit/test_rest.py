@@ -1,5 +1,5 @@
 # tests/unit/test_rest.py
-import json, pathlib  # noqa: I001
+import json, logging, pathlib  # noqa: I001
 from decimal import Decimal
 import httpx, pytest, respx
 from ai_trader.exchange.binance.errors import BinanceAPIError, BinanceConnectionError, BinanceRateLimitError
@@ -140,3 +140,22 @@ async def test_limit_order_defaults_gtc():
     body = route.calls.last.request.content.decode()
     assert "timeInForce=GTC" in body and "price=80000.10" in body and "reduceOnly=true" in body
     assert "workingType" not in body
+
+
+@respx.mock
+async def test_signed_get_does_not_log_query(caplog):
+    respx.get(f"{BASE}/fapi/v1/order").mock(return_value=httpx.Response(200, json=fx("order_response.json")))
+    caplog.set_level(logging.DEBUG)
+    await BinanceFuturesRest(BASE, "k", "s").get_order("BTCUSDT", client_order_id="ait-secret")
+    assert caplog.records  # our own debug line is captured
+    for rec in caplog.records:
+        text = rec.getMessage()
+        assert "signature=" not in text and "timestamp=" not in text and "ait-secret" not in text
+
+
+@respx.mock
+async def test_non_json_2xx_raises_api_error():
+    respx.get(f"{BASE}/fapi/v1/time").mock(return_value=httpx.Response(200, text="<html>oops</html>"))
+    with pytest.raises(BinanceAPIError) as ei:
+        await BinanceFuturesRest(BASE).server_time()
+    assert ei.value.status == 200 and ei.value.code == 0

@@ -34,9 +34,9 @@ async def _probe() -> None:
         t0 = time.perf_counter()
         await rest.ping()
         print(f"ping: {(time.perf_counter() - t0) * 1000:.0f} ms")
-        server = await rest.server_time()
-        rest.time_offset_ms = server - int(time.time() * 1000)
-        print(f"server_time: {server} (local offset {rest.time_offset_ms:+d} ms)")
+        offset = await rest.sync_time()
+        server = int(time.time() * 1000) + offset
+        print(f"server_time: {server} (local offset {offset:+d} ms)")
         info = await rest.exchange_info()
         print(f"exchange_info: {len(info.symbols)} trading perpetuals")
         for symbol in s.symbols:

@@ -32,3 +32,19 @@ def test_secrets_not_in_repr(monkeypatch):
     monkeypatch.setenv("BINANCE_API_SECRET", "topsecret")
     s = Settings(_env_file=None)
     assert "topsecret" not in repr(s) and "topsecret" not in str(s.model_dump())
+
+
+def test_configure_logging_quiets_httpx_loggers():
+    import logging
+
+    from ai_trader.logging_setup import configure_logging
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    try:
+        configure_logging("DEBUG", json_format=False)
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("httpcore").level == logging.WARNING
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)

@@ -31,7 +31,12 @@ from ai_trader.models import AccountState, Kline, MarkPrice, OrderRequest, Order
 
 log = logging.getLogger(__name__)
 
-_RETRY_BACKOFF_S = (0.5, 1.0, 2.0)
+# httpx logs every request URL at INFO; for signed GET/DELETE that URL carries the
+# signed query (timestamp, signature, order ids). Keep those loggers at WARNING.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+_RETRY_BACKOFF_S = (0.5, 1.0)  # sleeps between the 3 attempts
 _MAX_ATTEMPTS = 3
 _MARGIN_TYPE_UNCHANGED = -4046
 _TRIGGER_TYPES = {OrderType.STOP_MARKET, OrderType.TAKE_PROFIT_MARKET}
@@ -151,7 +156,12 @@ class BinanceFuturesRest:
                 continue
             if not resp.is_success:
                 raise _api_error(resp)
-            return resp.json() if resp.content else {}
+            if not resp.content:
+                return {}
+            try:
+                return resp.json()
+            except ValueError:
+                raise BinanceAPIError(resp.status_code, 0, resp.text) from None
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _require_key(self) -> None:

@@ -28,3 +28,7 @@ def configure_logging(level: str, json_format: bool) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
+    # httpx/httpcore log full request URLs at INFO/DEBUG, which for signed
+    # Binance requests include the signature and timestamp.
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
