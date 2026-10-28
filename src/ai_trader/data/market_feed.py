@@ -129,9 +129,15 @@ class MarkPriceSampler:
     `mark_samples` table's primary key is `(symbol, ts)` and an upstream `MarkPrice.event_time`
     that repeats (as it legitimately can for synthetic/replayed data) would otherwise collide
     and silently replace the previous sample instead of adding a new one. The wall-clock time
-    is nudged forward by a microsecond when it would not be strictly greater than the previous
-    write's timestamp, so two writes close enough to land on the same clock tick still get
-    distinct, monotonically increasing timestamps.
+    is nudged forward by a microsecond, per symbol, when it would not be strictly greater than
+    that symbol's previous write timestamp, so two writes for the *same* symbol close enough to
+    land on the same clock tick still get distinct, monotonically increasing timestamps. The
+    nudge is scoped per symbol (not global) because the primary key is `(symbol, ts)`: two
+    different symbols writing the same `ts` never collide, so nudging across symbols would
+    solve a problem that cannot occur. Per symbol, the interval gate below guarantees at least
+    `interval_s` of real time between writes in production, so the nudge only ever fires for
+    pathologically fast successive writes (e.g. a near-zero `interval_s` in tests) and never
+    drifts ahead of wall-clock time under normal operation.
     """
 
     def __init__(
@@ -145,7 +151,7 @@ class MarkPriceSampler:
         self._interval_s = interval_s
         self._clock = clock
         self._last_write_at: dict[str, float] = {}
-        self._last_ts: datetime | None = None
+        self._last_ts: dict[str, datetime] = {}
         bus.subscribe(MarkPrice, self._on_mark_price)
 
     async def _on_mark_price(self, mp: MarkPrice) -> None:
@@ -155,7 +161,8 @@ class MarkPriceSampler:
             return
         self._last_write_at[mp.symbol] = now
         ts = utc_now()
-        if self._last_ts is not None and ts <= self._last_ts:
-            ts = self._last_ts + timedelta(microseconds=1)
-        self._last_ts = ts
+        last_ts = self._last_ts.get(mp.symbol)
+        if last_ts is not None and ts <= last_ts:
+            ts = last_ts + timedelta(microseconds=1)
+        self._last_ts[mp.symbol] = ts
         await self._store.insert_mark_sample(mp.symbol, ts, mp.mark_price)
