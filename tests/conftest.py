@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from ai_trader.bus import EventBus
+from ai_trader.data.market_state import MarketState
 from ai_trader.models import (
     AccountState,
     Decision,
@@ -222,3 +223,19 @@ async def st(tmp_path):
     await store.open()
     yield store
     await store.close()
+
+
+@pytest.fixture
+def state_fresh():
+    """A MarketState with a constant clock and current marks for BTCUSDT/ETHUSDT,
+    so `age_s` is 0 for both regardless of when the test runs."""
+    state = MarketState(clock=lambda: 0.0)
+    state.update_mark(make_mark_price(symbol="BTCUSDT"))
+    state.update_mark(make_mark_price(symbol="ETHUSDT"))
+    return state
+
+
+@pytest.fixture
+def state_stale():
+    """An empty MarketState: `age_s` returns None for every symbol."""
+    return MarketState()
