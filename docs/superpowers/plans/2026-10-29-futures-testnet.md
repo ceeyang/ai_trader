@@ -471,7 +471,7 @@ async def test_realized_pnl_and_consecutive_losses(tmp_path):
     for i, pnl in enumerate(["5", "-1", "0", "-2", "-3"]):
         await st.insert_fill(make_fill(f"c{i}", realized_pnl=Decimal(pnl), event_time=T0 + timedelta(minutes=i)))
     assert await st.realized_pnl_since(T0 + timedelta(minutes=1)) == Decimal("-6")
-    assert await st.consecutive_losses() == 2
+    assert await st.consecutive_losses() == 3   # 0 被过滤后 -3,-2,-1 连续三笔
 
 async def test_kv_and_orders_roundtrip(tmp_path):
     st = Store(tmp_path / "t.db"); await st.open()
@@ -729,9 +729,9 @@ async def test_budget_exhausted_uses_fallback_without_calling_api():
 
 async def test_long_text_truncated():
     msgs = FakeMessages(FakeResp(SentimentOutput(direction="neutral", confidence=0, symbols=[], horizon="days", rationale="")))
-    await mk(FakeClient(msgs)).classify(make_news("n", title="t", text="x" * 10000))
+    await mk(FakeClient(msgs)).classify(make_news("n", title="t", text="z" * 10000))
     content = msgs.calls[0]["messages"][0]["content"]
-    assert "[truncated]" in content and content.count("x") <= 4000
+    assert "[truncated]" in content and content.count("z") <= 4000
 
 async def test_news_detector_emits_per_symbol_and_filters_low_confidence(tmp_path):
     class C:
