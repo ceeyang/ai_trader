@@ -38,6 +38,7 @@
 6. 独立风控引擎 + 杀开关；模拟经纪商（paper）与币安经纪商（live）同一接口。
 7. SQLite 落库：新闻、情绪、信号、前瞻收益、决策、风控裁决、订单、成交；CLI 查看信号有效性表。
 8. 单元测试不碰网络；集成测试仅在提供测试网 key 时运行。
+9. 自动调参器：根据实测信号有效性与活跃度自动调整探测器阈值、权重、名义与冷却（5.12），全部留痕。
 
 **非目标（Phase 2 再做）**
 
@@ -56,7 +57,7 @@
 - Python ≥ 3.12，`uv` 管理，`src/` 布局，包名仍为 `ai_trader`，全异步。
 - 价格与数量全程 `Decimal`；时间全程 tz-aware UTC。
 - 依赖 **[我的决定]**：`httpx`（REST）、`websockets`（WS）、`pydantic` v2 + `pydantic-settings`（模型与配置，`.env`）、`anthropic`（分类器）、`aiosqlite`（存储）、`typer`（CLI）、`feedparser`（RSS）。开发：`pytest`、`pytest-asyncio`、`respx`、`ruff`、`mypy`。
-- Claude 模型 `claude-opus-5`（claude-api skill 默认），`messages.parse` + Pydantic 结构化输出，`effort=low`，`max_tokens=1024`。不启用 server-side fallbacks（财经新闻分类几乎不会触发拒答；若 `stop_reason == "refusal"` 直接判中性）。
+- LLM 分类器 **[用户决定 2026-10-29 深夜]**：DeepSeek（用户提供 `DEEPSEEK_API_KEY`）。OpenAI 兼容 `POST https://api.deepseek.com/chat/completions`，`model="deepseek-chat"`，`response_format={"type":"json_object"}`，`temperature=0`，`max_tokens=512`，用项目已有 `httpx` 调用，不引入额外 SDK；任何失败退化为关键词分类器。
 - X 搜索每次 `max_results` 默认 10，轮询 120 s，每日读取预算默认 2000 条（约 10 美元/天上限）。
 - 单元测试禁止真实网络；WS 测试用本机回环假服务器。
 
@@ -102,7 +103,8 @@
 | `strategy: StrategyConfig` | 见下 | |
 | `detectors: DetectorConfig` | 见下 | |
 | `news: NewsConfig` | 见下 | |
-| `claude: ClaudeConfig` | 见下 | |
+| `deepseek_api_key: SecretStr \| None` | None | 来自 `.env` 的 `DEEPSEEK_API_KEY` |
+| `llm: LLMConfig` | 见下 | |
 
 `RiskLimits`：`max_leverage=3`，`max_order_notional_usdt=Decimal("200")`，`max_total_exposure_usdt=Decimal("500")`，`max_open_positions=2`，`max_daily_loss_pct=Decimal("5")`，`max_consecutive_losses=3`，`max_data_staleness_s=10.0`，`trading_enabled=True`。
 
@@ -112,7 +114,9 @@
 
 `NewsConfig`：`rss_feeds=["https://www.coindesk.com/arc/outboundfeeds/rss/","https://cointelegraph.com/rss"]`，`rss_poll_interval_s=300`，`x_bearer_token: SecretStr | None=None`，`x_query="(from:binance OR from:cz_binance OR from:coinbase OR from:SECGov OR from:federalreserve) -is:retweet"`，`x_poll_interval_s=120`，`x_max_results=10`，`x_daily_read_budget=2000`。
 
-`ClaudeConfig`：`enabled=True`，`model="claude-opus-5"`，`daily_call_budget=500`，`max_text_chars=4000`。
+`LLMConfig`：`enabled=True`，`provider: Literal["deepseek","none"]="deepseek"`，`model="deepseek-chat"`，`base_url="https://api.deepseek.com"`，`daily_call_budget=500`，`max_text_chars=4000`，`timeout_s=30.0`。
+
+`StrategyConfig` 与 `DetectorConfig` 是可变模型：AutoTuner（5.12）会在运行时修改它们，因此所有使用方必须在调用时读取字段，不得在构造时缓存。
 
 ### 5.2 `ai_trader/models.py`（pydantic v2，`frozen=True`）
 
@@ -233,11 +237,11 @@ class BinanceFuturesWS:
 
 `sentiment/base.py`：`class SentimentClassifier(Protocol): name: str; async def classify(self, item: NewsItem) -> Sentiment`。`canonical_symbols(raw: Iterable[str], universe) -> list[str]`（`"BTC"`/`"btc"`/`"BTCUSDT"` → `"BTCUSDT"`，未知丢弃）。
 `sentiment/keyword.py`：`KeywordClassifier(universe)`，内置利多/利空词表（中英文）与币种词 → 符号映射；confidence 0.3（1 词）~0.6（≥3 词）；无命中 → NEUTRAL 0.0。
-`sentiment/claude.py`：`SentimentOutput(BaseModel)`（direction/confidence/symbols/horizon/rationale）；`ClaudeClassifier(client: AsyncAnthropic, universe, *, model, fallback: SentimentClassifier, budget: DailyBudget, max_text_chars)`。调用 `await client.messages.parse(model=..., max_tokens=1024, system=[{"type":"text","text":SYSTEM,"cache_control":{"type":"ephemeral"}}], messages=[{"role":"user","content":user_text}], output_format=SentimentOutput, output_config={"effort":"low"})`。`stop_reason == "refusal"` 或 `parsed_output is None` → NEUTRAL；任何 `anthropic.APIError` 或预算耗尽 → `fallback.classify(item)`，结果 `model` 字段标注 `"keyword-fallback"`。
+`sentiment/deepseek.py`：`SentimentOutput(BaseModel)`（direction/confidence/symbols/horizon/rationale）；`DeepSeekClassifier(http: httpx.AsyncClient, api_key: str, universe, *, model="deepseek-chat", base_url="https://api.deepseek.com", fallback: SentimentClassifier, budget: DailyBudget, max_text_chars=4000, timeout_s=30.0)`，`name = model`。请求：`POST {base_url}/chat/completions`，头 `Authorization: Bearer <key>`，体 `{"model", "temperature": 0, "max_tokens": 512, "response_format": {"type": "json_object"}, "messages": [{"role":"system","content":SYSTEM},{"role":"user","content":user_text}]}`（SYSTEM 必须含 "json" 字样并列出符号 universe）。`choices[0].message.content` 经 `SentimentOutput.model_validate_json` 解析；预算耗尽、非 2xx、`httpx.HTTPError`、非法 JSON/校验失败 → `fallback.classify(item)`，结果 `model="keyword-fallback"`；成功 → `canonical_symbols`，`model=<model>`。日志不得包含 key。
 `detectors/base.py`：`class Detector(Protocol): name: str; subscribes_to: tuple[type, ...]; async def on_event(self, event) -> list[Signal]`；`DetectorRunner(bus, store, detectors)`：为每个探测器订阅其事件类型，产出的 Signal 先 `store.insert_signal` 再 `bus.publish`。
 `detectors/funding_extreme.py`：年化 = `funding_rate × 3 × 365`；|年化| ≥ 阈值 → 正为 BEARISH、负为 BULLISH，`strength = min(1, |年化| / (2×阈值))`，每 `(symbol, next_funding_time)` 只发一次，`expires_at = next_funding_time`。
 `detectors/liquidation_burst.py`：滑动窗口内 `SELL` 侧清算名义和 ≥ 阈值 → BULLISH；`BUY` 侧 → BEARISH；`strength = min(1, 和/(2×阈值))`；`expires_at = now + 15 min`；每 symbol 冷却 `liquidation_cooldown_s`。
-`detectors/news_sentiment.py`：`NewsSentimentDetector(classifier, universe, store, state, min_confidence)`：分类 → `store.insert_sentiment` → 每个命中符号一条 Signal（`strength = confidence`；horizon → 过期：minutes 30 min、hours 4 h、days 24 h）；NEUTRAL 或 confidence < min → 不发。
+`detectors/news_sentiment.py`：`NewsSentimentDetector(classifier, universe, store, state, cfg: DetectorConfig | None = None, *, min_confidence: float | None = None)`（阈值每次调用时读取：显式 `min_confidence` 优先，否则 `cfg.news_min_confidence`）：分类 → `store.insert_sentiment` → 每个命中符号一条 Signal（`strength = confidence`；horizon → 过期：minutes 30 min、hours 4 h、days 24 h）；NEUTRAL 或 confidence < min → 不发。
 
 ### 5.7 `ai_trader/strategy/aggregator.py`
 
@@ -279,9 +283,20 @@ class Broker(Protocol):
 
 ### 5.11 `ai_trader/app.py` 与 `ai_trader/cli.py`
 
-`create_components(settings, *, rest=None, ws_factory=None, anthropic_client=None, http=None, store=None) -> Components`（dataclass，持有全部组件，便于测试注入）；`App(components).run()`：`store.open` → `bus.start` → `broker.start` → 启动 feed/watchdog/sampler/poller/aggregator/execution/tracker/reconcile 任务 → 每 60 s 健康日志（WS 年龄、信号数、持仓、杀开关）→ SIGINT/SIGTERM 优雅停止（反序停、关 listenKey、关 DB）。
+`async create_components(settings, *, rest=None, ws_factory=None, http=None, store=None) -> Components`（内部 `await rest.exchange_info()`；`http` 为 RSS/X/DeepSeek 共用客户端）（dataclass，持有全部组件，便于测试注入）；`App(components).run()`：`store.open` → `bus.start` → `broker.start` → 启动 feed/watchdog/sampler/poller/aggregator/execution/tracker/reconcile 任务 → 每 60 s 健康日志（WS 年龄、信号数、持仓、杀开关）→ SIGINT/SIGTERM 优雅停止（反序停、关 listenKey、关 DB）。每个长期组件由监督器运行：抛出 `Exception` 时记录并按 1/2/5/10/30 s 退避重启，单个组件崩溃不得终止进程。
 
-CLI（typer，脚本名 `ai-trader`）：`probe`（ping、服务器时间与本地偏移、合约数、各 symbol 标记价与年化资金费；有 key 时打印余额）、`run [--mode paper|live] [--confirm-mainnet]`（`binance_testnet=False` 且无 `--confirm-mainnet` → 退出码 2 并说明）、`kill`、`status`（持仓、挂单、当日已实现盈亏、杀开关、最近 10 条信号）、`signals`（有效性表）、`classify TEXT`（有 Anthropic 凭据用 Claude，否则关键词）。
+CLI（typer，脚本名 `ai-trader`）：`tuning`（最近 50 条自动调参记录）、`probe`（ping、服务器时间与本地偏移、合约数、各 symbol 标记价与年化资金费；有 key 时打印余额）、`run [--mode paper|live] [--confirm-mainnet]`（`binance_testnet=False` 且无 `--confirm-mainnet` → 退出码 2 并说明）、`kill`、`status`（持仓、挂单、当日已实现盈亏、杀开关、最近 10 条信号）、`signals`（有效性表）、`classify TEXT`（有 Anthropic 凭据用 Claude，否则关键词）。
+
+### 5.12 `ai_trader/strategy/autotune.py`（**[用户要求 2026-10-29 深夜]**："如果结果出现偏差，或者实测数据不好，你需要自动调整策略"）
+
+`AutoTuner(store, strategy_cfg: StrategyConfig, detector_cfg: DetectorConfig, *, interval_s=1800, activity_window_s=7200, clock)`：每 `interval_s` 执行 `tick()`，按顺序评估四条规则，每条每次最多一步，所有改动写入 `tuning_log(ts, rule, field, old, new, reason)` 并打日志；**绝不修改 `RiskLimits`**：
+
+1. `activity_floor`：窗口内信号 < 3 且决策 == 0 → 清算阈值 ×0.7（≥5000）、新闻置信度阈值 −0.05（≥0.3）、资金费率阈值 ×0.8（≥0.05）、`entry_threshold` −0.05（≥0.3）。
+2. `detector_quality`：1 h 前瞻收益样本 n ≥ 20 的探测器，命中率 < 0.40 且均值 < 0 → 权重 −0.25（≥0，0 即停用）；命中率 ≥ 0.55 且均值 > 0 → 权重 +0.1（≤1.5）。
+3. `loss_brake`：当日已实现亏损 ≤ −2% 起始权益 → `base_notional_usdt` ×0.5（≥20）且 `entry_threshold` +0.1（≤0.9）；当日 ≥ +2% 且名义低于默认 → ×1.25 回升（≤100）。
+4. `overtrading_brake`：窗口内决策 ≥ 10 → `cooldown_s` ×1.5（≤3600）且 `entry_threshold` +0.05（≤0.9）。
+
+模型 `TuningChange(ts, rule, field, old, new, reason)`；`Store` 新增 `insert_tuning_change`、`tuning_log(limit)`、`count_signals_since(ts)`、`count_decisions_since(ts)`；CLI `tuning` 与 `status` 展示当前生效参数。
 
 ## 6. 测试策略
 

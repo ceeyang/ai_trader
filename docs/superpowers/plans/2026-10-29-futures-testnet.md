@@ -18,7 +18,7 @@
 - 任何订单必须经 `RiskEngine.evaluate` 批准后才能到达 `Broker.submit`（`KillSwitch` 的平仓/撤单除外）。
 - 日志禁止输出 API key / secret / bearer token / 签名查询串。
 - 单元测试禁止真实网络；时钟全部可注入（`clock` 参数）。
-- Claude 模型字符串固定 `claude-opus-5`；调用 `client.messages.parse(..., output_format=SentimentOutput, output_config={"effort": "low"})`，`max_tokens=1024`。
+- LLM 分类器使用 DeepSeek（OpenAI 兼容 `POST {base_url}/chat/completions`，`model="deepseek-chat"`，`response_format={"type":"json_object"}`，`temperature=0`，`max_tokens=512`，通过项目已有的 `httpx` 调用，不引入 `anthropic`/`openai` SDK）；key 来自 `.env` 的 `DEEPSEEK_API_KEY`，禁止出现在日志。
 - Git 提交信息不带任何 Claude 署名或 "Generated with" 字样。
 - 每个任务结束前运行 `uv run pytest -q` 必须全绿，`uv run ruff check .` 无错误。
 
@@ -28,7 +28,7 @@
 2. **下单请求超时但交易所已成交**：`BinanceFuturesBroker.submit` 必须先按 `client_order_id` 查单，查到则不重发。（Task 12 `test_submit_timeout_then_found_does_not_resend`）
 3. **行情陈旧期间**：`RiskEngine` 拒绝新开仓（`data_stale`），但 CLOSE 仍放行。（Task 11 `test_stale_blocks_open_but_allows_close`）
 4. **UTC 日切后的日亏损基准**：新的一天必须重新写 `day_start_equity`，昨日亏损不影响今日。（Task 11 `test_daily_loss_limit_and_reset_on_new_utc_day`）
-5. **分类器任何异常**（API 错误、拒答、预算耗尽、输出中有未知符号）都不能让新闻管道崩溃，必须退化为中性或关键词兜底。（Task 9 `test_claude_api_error_falls_back_to_keyword`、`test_refusal_returns_neutral`、`test_unknown_symbols_dropped`）
+5. **分类器任何异常**（HTTP 错误、超时、非法 JSON、预算耗尽、输出中有未知符号）都不能让新闻管道崩溃，必须退化为关键词兜底或丢弃未知符号。（Task 9 `test_http_error_falls_back_to_keyword`、`test_timeout_falls_back_to_keyword`、`test_malformed_json_falls_back_to_keyword`、`test_unknown_symbols_dropped`）
 
 ---
 
@@ -43,9 +43,9 @@ src/ai_trader/
   data/__init__.py, market_state.py, market_feed.py
   data/news/__init__.py, base.py, rss.py, x_api.py, poller.py
   analysis/__init__.py, forward_returns.py
-  analysis/sentiment/__init__.py, base.py, keyword.py, claude.py
+  analysis/sentiment/__init__.py, base.py, keyword.py, deepseek.py
   analysis/detectors/__init__.py, base.py, funding_extreme.py, liquidation_burst.py, news_sentiment.py
-  strategy/__init__.py, aggregator.py
+  strategy/__init__.py, aggregator.py, autotune.py
   risk/__init__.py, engine.py, kill_switch.py
   execution/__init__.py, broker.py, paper.py, binance.py, service.py
   storage/__init__.py, db.py
@@ -55,7 +55,7 @@ tests/
   unit/test_settings.py, test_models.py, test_bus.py, test_filters.py, test_parsers.py, test_rest.py, test_ws.py,
        test_store.py, test_market_feed.py, test_detectors.py, test_news_sources.py, test_sentiment.py,
        test_aggregator.py, test_risk.py, test_paper_broker.py, test_binance_broker.py, test_execution.py,
-       test_forward_returns.py, test_app.py, test_cli.py
+       test_forward_returns.py, test_app.py, test_cli.py, test_autotune.py
   integration/test_testnet.py
 ```
 
@@ -662,21 +662,29 @@ async def test_poller_dedupes_and_publishes(tmp_path):
 
 ---
 
-### Task 9: 情绪分类器（关键词、Claude）与新闻情绪探测器
+### Task 9: 情绪分类器（关键词、DeepSeek）与新闻情绪探测器
 
 **Files:**
-- Create: `src/ai_trader/analysis/sentiment/__init__.py`, `base.py`, `keyword.py`, `claude.py`; `src/ai_trader/analysis/detectors/news_sentiment.py`
-- Modify: `src/ai_trader/cli.py`（新增 `classify TEXT`）
+- Create: `src/ai_trader/analysis/sentiment/__init__.py`, `base.py`, `keyword.py`, `deepseek.py`; `src/ai_trader/analysis/detectors/news_sentiment.py`
+- Modify: `src/ai_trader/settings.py`（`ClaudeConfig`/`claude` → `LLMConfig`/`llm`，新增 `deepseek_api_key: SecretStr | None = None`）、`tests/unit/test_settings.py`（`s.claude.model == "claude-opus-5"` 改为 `s.llm.model == "deepseek-chat"`）、`pyproject.toml`（`uv remove anthropic`）、`src/ai_trader/cli.py`（新增 `classify TEXT`）
 - Test: `tests/unit/test_sentiment.py`
 
 **Interfaces:**
-- Consumes: `NewsItem`、`Sentiment`、`DailyBudget`、`Store`、`MarketState`。
-- Produces: `SentimentClassifier`、`canonical_symbols`、`KeywordClassifier(universe)`（`name="keyword"`）、`SentimentOutput`、`ClaudeClassifier(client, universe, *, model, fallback, budget, max_text_chars)`、`NewsSentimentDetector(classifier, universe, store, state, min_confidence)`（`name="news_sentiment"`）。
+- Consumes: `NewsItem`、`Sentiment`、`DailyBudget`（含 `refund`）、`Store`、`MarketState`、`httpx.AsyncClient`。
+- Produces: `SentimentClassifier` Protocol（`name: str`，`async classify(item) -> Sentiment`）、`canonical_symbols(raw, universe) -> list[str]`、`KeywordClassifier(universe)`（`name="keyword"`）、`SentimentOutput(BaseModel)`（`direction: Literal["bullish","bearish","neutral"]`, `confidence: float`（0..1 夹紧）, `symbols: list[str]`, `horizon: Literal["minutes","hours","days"]`, `rationale: str`）、`DeepSeekClassifier(http: httpx.AsyncClient, api_key: str, universe: Sequence[str], *, model: str = "deepseek-chat", base_url: str = "https://api.deepseek.com", fallback: SentimentClassifier, budget: DailyBudget, max_text_chars: int = 4000, timeout_s: float = 30.0)`（`name = model`）、`NewsSentimentDetector(classifier, universe, store, state, cfg: DetectorConfig | None = None, *, min_confidence: float | None = None)`（`name="news_sentiment"`，`subscribes_to=(NewsItem,)`；阈值在每次调用时读取：`min_confidence` 传了就用它，否则读 `cfg.news_min_confidence`）。
+- `LLMConfig`：`enabled: bool = True`、`provider: Literal["deepseek","none"] = "deepseek"`、`model: str = "deepseek-chat"`、`base_url: str = "https://api.deepseek.com"`、`daily_call_budget: int = 500`、`max_text_chars: int = 4000`、`timeout_s: float = 30.0`。
 
 - [ ] **Step 1: 写失败测试**
 
 ```python
+import json, httpx, respx
 UNI = ["BTCUSDT", "ETHUSDT"]
+DS = "https://api.deepseek.com/chat/completions"
+def ds_response(obj, content=None):
+    return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": content if content is not None else json.dumps(obj)}}],
+                                     "usage": {"prompt_tokens": 100, "completion_tokens": 20}})
+def mk(budget=None, **kw):
+    return DeepSeekClassifier(httpx.AsyncClient(), "sk-test", UNI, fallback=KeywordClassifier(UNI), budget=budget or DailyBudget(10), **kw)
 
 def test_canonical_symbols(): assert canonical_symbols(["btc", "ETHUSDT", "DOGE", "Bitcoin"], UNI) == ["BTCUSDT", "ETHUSDT"]
 
@@ -688,68 +696,78 @@ async def test_keyword_classifier_neutral_without_hits():
     s = await KeywordClassifier(UNI).classify(make_news("n", title="Weekly newsletter", text="hello"))
     assert s.direction == Direction.NEUTRAL and s.confidence == 0.0
 
-class FakeMessages:
-    def __init__(self, result=None, exc=None): self.result, self.exc, self.calls = result, exc, []
-    async def parse(self, **kw):
-        self.calls.append(kw)
-        if self.exc: raise self.exc
-        return self.result
-class FakeClient:
-    def __init__(self, messages): self.messages = messages
-class FakeResp:
-    def __init__(self, parsed, stop_reason="end_turn"): self.parsed_output, self.stop_reason = parsed, stop_reason
-def mk(client, budget=None): return ClaudeClassifier(client, UNI, model="claude-opus-5", fallback=KeywordClassifier(UNI), budget=budget or DailyBudget(10), max_text_chars=4000)
+@respx.mock
+async def test_deepseek_classifier_parses_and_canonicalizes():
+    route = respx.post(DS).mock(return_value=ds_response({"direction": "bullish", "confidence": 0.8, "symbols": ["BTC", "XRP"], "horizon": "hours", "rationale": "ETF inflow"}))
+    s = await mk().classify(make_news("n", title="Spot BTC ETF sees record inflow", text="..."))
+    assert s.direction == Direction.BULLISH and s.symbols == ["BTCUSDT"] and s.model == "deepseek-chat" and s.confidence == 0.8 and s.horizon == Horizon.HOURS
+    req = route.calls.last.request; body = json.loads(req.content)
+    assert req.headers["Authorization"] == "Bearer sk-test"
+    assert body["model"] == "deepseek-chat" and body["response_format"] == {"type": "json_object"} and body["temperature"] == 0 and body["max_tokens"] == 512
+    assert body["messages"][0]["role"] == "system" and "BTCUSDT" in body["messages"][0]["content"] and "json" in body["messages"][0]["content"].lower()
+    assert body["messages"][1]["role"] == "user" and "Spot BTC ETF" in body["messages"][1]["content"]
 
-async def test_claude_classifier_parses_and_canonicalizes():
-    out = SentimentOutput(direction="bullish", confidence=0.8, symbols=["BTC", "XRP"], horizon="hours", rationale="ETF inflow")
-    msgs = FakeMessages(FakeResp(out)); c = mk(FakeClient(msgs))
-    s = await c.classify(make_news("n", title="Spot BTC ETF sees record inflow", text="..."))
-    assert s.direction == Direction.BULLISH and s.symbols == ["BTCUSDT"] and s.model == "claude-opus-5"
-    kw = msgs.calls[0]
-    assert kw["model"] == "claude-opus-5" and kw["max_tokens"] == 1024 and kw["output_format"] is SentimentOutput and kw["output_config"] == {"effort": "low"}
-    assert kw["system"][0]["cache_control"] == {"type": "ephemeral"} and "BTCUSDT" in kw["system"][0]["text"]
-
+@respx.mock
 async def test_unknown_symbols_dropped():
-    out = SentimentOutput(direction="bullish", confidence=0.9, symbols=["DOGE"], horizon="days", rationale="r")
-    assert (await mk(FakeClient(FakeMessages(FakeResp(out)))).classify(make_news("n"))).symbols == []
+    respx.post(DS).mock(return_value=ds_response({"direction": "bullish", "confidence": 0.9, "symbols": ["DOGE"], "horizon": "days", "rationale": "r"}))
+    assert (await mk().classify(make_news("n"))).symbols == []
 
-async def test_refusal_returns_neutral():
-    c = mk(FakeClient(FakeMessages(FakeResp(None, stop_reason="refusal"))))
-    assert (await c.classify(make_news("n", title="x hack", text=""))).direction == Direction.NEUTRAL
-
-async def test_claude_api_error_falls_back_to_keyword():
-    import anthropic, httpx
-    err = anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
-    s = await mk(FakeClient(FakeMessages(exc=err))).classify(make_news("n", title="Exchange hack", text=""))
+@respx.mock
+async def test_malformed_json_falls_back_to_keyword():
+    respx.post(DS).mock(return_value=ds_response(None, content="not json at all"))
+    s = await mk().classify(make_news("n", title="Exchange hack", text=""))
     assert s.model == "keyword-fallback" and s.direction == Direction.BEARISH
 
-async def test_budget_exhausted_uses_fallback_without_calling_api():
-    msgs = FakeMessages(FakeResp(None)); c = mk(FakeClient(msgs), DailyBudget(0))
-    s = await c.classify(make_news("n", title="hack", text="")); assert msgs.calls == [] and s.model == "keyword-fallback"
+@respx.mock
+async def test_http_error_falls_back_to_keyword():
+    respx.post(DS).mock(return_value=httpx.Response(500, json={"error": "boom"}))
+    assert (await mk().classify(make_news("n", title="Exchange hack", text=""))).model == "keyword-fallback"
 
+@respx.mock
+async def test_timeout_falls_back_to_keyword():
+    respx.post(DS).mock(side_effect=httpx.ReadTimeout("t"))
+    assert (await mk().classify(make_news("n", title="Exchange hack", text=""))).model == "keyword-fallback"
+
+@respx.mock
+async def test_budget_exhausted_uses_fallback_without_calling_api():
+    route = respx.post(DS).mock(return_value=ds_response({"direction": "neutral", "confidence": 0, "symbols": [], "horizon": "days", "rationale": ""}))
+    s = await mk(DailyBudget(0)).classify(make_news("n", title="hack", text=""))
+    assert route.call_count == 0 and s.model == "keyword-fallback"
+
+@respx.mock
 async def test_long_text_truncated():
-    msgs = FakeMessages(FakeResp(SentimentOutput(direction="neutral", confidence=0, symbols=[], horizon="days", rationale="")))
-    await mk(FakeClient(msgs)).classify(make_news("n", title="t", text="z" * 10000))
-    content = msgs.calls[0]["messages"][0]["content"]
+    route = respx.post(DS).mock(return_value=ds_response({"direction": "neutral", "confidence": 0, "symbols": [], "horizon": "days", "rationale": ""}))
+    await mk().classify(make_news("n", title="t", text="z" * 10000))
+    content = json.loads(route.calls.last.request.content)["messages"][1]["content"]
     assert "[truncated]" in content and content.count("z") <= 4000
+
+def test_settings_llm_defaults(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-abc")
+    s = Settings(_env_file=None)
+    assert s.llm.provider == "deepseek" and s.llm.model == "deepseek-chat" and s.llm.base_url == "https://api.deepseek.com" and s.llm.daily_call_budget == 500
+    assert s.deepseek_api_key.get_secret_value() == "sk-abc" and "sk-abc" not in repr(s)
 
 async def test_news_detector_emits_per_symbol_and_filters_low_confidence(tmp_path):
     class C:
         name = "fake"
         def __init__(self, conf): self.conf = conf
         async def classify(self, item): return Sentiment(direction=Direction.BULLISH, confidence=self.conf, symbols=UNI, horizon=Horizon.HOURS, rationale="r", model="fake")
-    st = Store(tmp_path / "t.db"); await st.open(); state = MarketState(); state.update_mark(make_mark_price())
+    st = Store(tmp_path / "t.db"); await st.open(); state = MarketState()
+    for sym in UNI: state.update_mark(make_mark_price(symbol=sym))
     det = NewsSentimentDetector(C(0.7), UNI, st, state, min_confidence=0.6)
     sigs = await det.on_event(make_news("n1"))
     assert [s.symbol for s in sigs] == UNI and sigs[0].strength == 0.7 and sigs[0].expires_at - sigs[0].created_at == timedelta(hours=4) and sigs[0].detector == "news_sentiment"
     assert await NewsSentimentDetector(C(0.5), UNI, st, state, min_confidence=0.6).on_event(make_news("n2")) == []
     assert await st.count("sentiments") == 2
+
+async def test_news_detector_reads_cfg_threshold_at_call_time(tmp_path):
+    ...  # cfg = DetectorConfig(); det = NewsSentimentDetector(C(0.5), UNI, st, state, cfg) → [] ; cfg.news_min_confidence = 0.4 → 2 signals
 ```
 
 - [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现** — `claude.py` 的 `SYSTEM` 常量内容：角色（加密货币市场分析师）、任务（判断对永续合约价格的短期影响）、符号 universe、置信度口径（官方/意外/价格直接相关→高；传闻/营销/表情包→中性或低；市场整体消息归到 BTCUSDT）、输出字段说明。`classify` 流程：`budget.try_consume()` 失败→fallback；`try: resp = await client.messages.parse(...)`；`except anthropic.APIError`→fallback；`resp.stop_reason == "refusal" or resp.parsed_output is None`→NEUTRAL 0.0；否则 `canonical_symbols`。user content 格式：`source / author / published_at / title / text(截断后加 "[truncated]")`。CLI `classify TEXT`：构造 `NewsItem(source="cli")`，若 `settings.claude.enabled` 且能构造 `AsyncAnthropic()` 则用 Claude（任何异常回落关键词），打印 JSON。
-- [ ] **Step 4: 运行通过** — `uv run pytest -q && uv run ruff check . && uv run ai-trader classify "SEC approves spot ETH ETF options"`
-- [ ] **Step 5: 提交** — `git add -A && git commit -m "feat: keyword and Claude sentiment classifiers with news sentiment detector"`
+- [ ] **Step 3: 实现** — `deepseek.py`：`SYSTEM` 常量（角色：加密货币市场分析师；任务：判断新闻/帖子对永续合约价格的短期影响；列出符号 universe；置信度口径：官方/意外/与价格直接相关→高，传闻/营销/表情包→中性或低，市场整体消息归到 BTCUSDT；必须明确要求"以 JSON 对象回复，键为 direction/confidence/symbols/horizon/rationale"——DeepSeek 的 `json_object` 模式要求提示词里出现 "json"）。`classify` 流程：`budget.try_consume()` 失败→fallback；`POST {base_url}/chat/completions`，头 `Authorization: Bearer <key>`，体 `{"model", "temperature": 0, "max_tokens": 512, "response_format": {"type": "json_object"}, "messages": [system, user]}`，超时 `timeout_s`；非 2xx、`httpx.HTTPError`、`choices[0].message.content` 不是合法 JSON 或不通过 `SentimentOutput.model_validate_json` → `log.warning` 并 fallback（`model="keyword-fallback"`）；成功 → `canonical_symbols`，`Sentiment(model=self.model)`。user content 格式：`source / author / published_at / title / text(截断后加 "[truncated]")`。日志不得包含 key。`NewsSentimentDetector`：分类 → `store.insert_sentiment` → 每个命中符号一条 Signal（strength=confidence；horizon→过期 minutes 30 min / hours 4 h / days 24 h；`ref_price` 取 `state.mark(symbol)`，无则跳过该符号），NEUTRAL 或 confidence < 阈值时不发。CLI `classify TEXT`：有 `settings.deepseek_api_key` 且 `settings.llm.enabled` 用 DeepSeek，否则关键词，打印 JSON。
+- [ ] **Step 4: 运行通过** — `uv run pytest -q && uv run ruff check . && uv run ai-trader classify "SEC approves spot ETH ETF options"`（本机 `.env` 有 DeepSeek key，应返回 `model: deepseek-chat`）
+- [ ] **Step 5: 提交** — `git add -A && git commit -m "feat: keyword and DeepSeek sentiment classifiers with news sentiment detector"`
 
 ---
 
@@ -1007,7 +1025,7 @@ async def test_max_hold_emits_close(...): ...               # 开仓后 clock = 
 - Test: `tests/unit/test_forward_returns.py`, `tests/unit/test_app.py`, `tests/unit/test_cli.py`
 
 **Interfaces:**
-- Produces: `ForwardReturnTracker(store, state, *, horizons_s=(600, 3600, 14400), interval_s=60, clock=time.time)`（`async tick()`、`async run()`、`async stop()`）；`Components` dataclass（字段 `settings, bus, store, state, rest, broker, feed, watchdog, sampler, detectors, runner, poller, aggregator, risk, kill_switch, execution, tracker`）；`create_components(settings, *, rest=None, ws_factory=None, anthropic_client=None, http=None, store=None) -> Components`；`App(components)` 的 `async run()`、`async stop()`；CLI 子命令 `probe/run/kill/status/signals/classify/version`。
+- Produces: `ForwardReturnTracker(store, state, *, horizons_s=(600, 3600, 14400), interval_s=60, clock=time.time)`（`async tick()`、`async run()`、`async stop()`）；`Components` dataclass（字段 `settings, bus, store, state, rest, broker, feed, watchdog, sampler, detectors, runner, poller, aggregator, risk, kill_switch, execution, tracker`）；`async create_components(settings, *, rest=None, ws_factory=None, http=None, store=None) -> Components`（async：内部 `await rest.exchange_info()`；`http` 为 RSS/X/DeepSeek 共用的 `httpx.AsyncClient`）；`App(components)` 的 `async run()`、`async stop()`；`App.run()` 用监督器运行每个长期组件：组件协程抛出 `Exception` 时记录 `log.exception`、按 1/2/5/10/30 s 退避后重启，直到 `stop()`；CLI 子命令 `probe/run/kill/status/signals/classify/version`。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1025,14 +1043,17 @@ async def test_forward_return_skips_when_no_sample(st):
     await tr.tick(); assert await st.effectiveness() == []
 
 async def test_create_components_paper_mode_wires_without_network(tmp_path, exchange_info):
-    s = Settings(_env_file=None, mode="paper", db_path=tmp_path / "a.db", claude=ClaudeConfig(enabled=False))
-    c = create_components(s, rest=FakeRest(exchange_info), ws_factory=fake_ws_factory,
+    s = Settings(_env_file=None, mode="paper", db_path=tmp_path / "a.db", llm=LLMConfig(enabled=False))
+    c = await create_components(s, rest=FakeRest(exchange_info), ws_factory=fake_ws_factory,
                           http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
     assert isinstance(c.broker, PaperBroker) and len(c.detectors) == 3 and c.risk is not None
 
 async def test_app_start_stop_cleanly(tmp_path, exchange_info):
-    c = create_components(...同上...); app = App(c)
+    c = await create_components(...同上...); app = App(c)
     task = asyncio.create_task(app.run()); await asyncio.sleep(0.2); await app.stop(); await asyncio.wait_for(task, 5)
+
+async def test_app_restarts_crashed_component(tmp_path, exchange_info):
+    ...  # 用一个 run() 先抛 RuntimeError 再正常阻塞的假组件替换 c.poller；App.run() 后 0.3 s 内该组件被调用 ≥ 2 次且 app 仍在运行；caplog 含 "restarting"
 
 def test_cli_run_live_mainnet_requires_confirm(monkeypatch):
     monkeypatch.setenv("BINANCE_TESTNET", "false")
@@ -1047,7 +1068,7 @@ def test_cli_signals_prints_table(tmp_path, monkeypatch):
 `FakeRest(exchange_info)`：`async exchange_info()` 返回传入对象，`async sync_time()` 返回 0，`async premium_index(sym)` 返回 `make_mark_price(symbol=sym)`；放入 `tests/conftest.py`。
 
 - [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现** — `create_components`：`mode=="live"` 且缺 key → `raise SystemExit("live 模式需要 BINANCE_API_KEY/BINANCE_API_SECRET")`；`claude.enabled` 时尝试 `anthropic_client or AsyncAnthropic()`，失败则 `KeywordClassifier`；X 源仅在 `news.x_bearer_token` 存在时加入；`exchange_info` 在 `create_components` 内不请求网络，改为 `App.run()` 启动时 `await rest.exchange_info()` 注入 broker（测试通过 `FakeRest`）。`App.run()` 用 `asyncio.TaskGroup`；`stop()` 设置 `asyncio.Event` 后各组件 `stop()`。CLI `run`：`asyncio.run(...)`，`loop.add_signal_handler` 在 Windows 抛 `NotImplementedError` 时改为捕获 `KeyboardInterrupt`。`status`/`kill`：直接构造 `Store` 与（live 时）REST；`kill` 在 paper 模式只写 kv。
+- [ ] **Step 3: 实现** — `create_components`：`mode=="live"` 且缺 key → `raise SystemExit("live 模式需要 BINANCE_API_KEY/BINANCE_API_SECRET")`；`settings.llm.enabled and settings.llm.provider == "deepseek" and settings.deepseek_api_key` 时用 `DeepSeekClassifier(http, key, symbols, model=..., base_url=..., fallback=KeywordClassifier, budget=DailyBudget(llm.daily_call_budget), ...)`，否则 `KeywordClassifier`；X 源仅在 `news.x_bearer_token` 存在时加入；`create_components` 为 async，内部 `await rest.exchange_info()`（测试通过 `FakeRest`）。`App.run()` 用 `asyncio.TaskGroup` 承载一组 `_supervise(name, factory)` 任务（见 Interfaces 的监督器要求）；`stop()` 设置 `asyncio.Event` 后各组件 `stop()`。CLI `run`：`asyncio.run(...)`，`loop.add_signal_handler` 在 Windows 抛 `NotImplementedError` 时改为捕获 `KeyboardInterrupt`。`status`/`kill`：直接构造 `Store` 与（live 时）REST；`kill` 在 paper 模式只写 kv。
 - [ ] **Step 4: 运行通过** — `uv run pytest -q && uv run ruff check .`
 - [ ] **Step 5: 提交** — `git add -A && git commit -m "feat: app wiring, forward-return tracker and full CLI"`
 
@@ -1101,8 +1122,89 @@ async def test_public_ping_and_mark():
 
 ---
 
+### Task 15: 自动调参器（AutoTuner）
+
+**Files:**
+- Create: `src/ai_trader/strategy/autotune.py`
+- Modify: `src/ai_trader/models.py`（新增 `TuningChange`）、`src/ai_trader/storage/db.py`（新增 `tuning_log` 表与 `insert_tuning_change(change)`、`tuning_log(limit) -> list[TuningChange]`、`count_signals_since(ts) -> int`、`count_decisions_since(ts) -> int`）、`src/ai_trader/app.py`（装配并启动 AutoTuner）、`src/ai_trader/cli.py`（新增 `tuning` 子命令；`status` 打印当前生效的 `entry_threshold`、`base_notional_usdt`、`cooldown_s`、`detector_weights`、三个探测器阈值）
+- Test: `tests/unit/test_autotune.py`
+
+**Interfaces:**
+- Consumes: `Store.effectiveness()`、`Store.realized_pnl_since`、`Store.get_kv("day_start_equity:<UTC date>")`、`StrategyConfig`、`DetectorConfig`（两者为可变 pydantic 模型；聚合器/探测器/执行服务在每次使用时读取字段，而非构造时缓存）。
+- Produces: `TuningChange(ts: datetime, rule: str, field: str, old: str, new: str, reason: str)`（frozen 模型）；`AutoTuner(store, strategy_cfg: StrategyConfig, detector_cfg: DetectorConfig, *, interval_s: int = 1800, activity_window_s: int = 7200, clock=time.time)`，属性 `strategy_cfg`/`detector_cfg`，方法 `async tick() -> list[TuningChange]`、`async run()`、`async stop()`。
+
+规则（每次 `tick` 依次评估，每条规则每次最多一步，所有改动落库并打日志；**绝不修改 `RiskLimits`**）：
+
+1. `activity_floor`：最近 `activity_window_s` 内信号数 < 3 且决策数 == 0 → `detector_cfg.liquidation_notional_threshold_usdt *= 0.7`（下限 5000）、`detector_cfg.news_min_confidence -= 0.05`（下限 0.3）、`detector_cfg.funding_annualized_threshold *= 0.8`（下限 0.05）、`strategy_cfg.entry_threshold -= 0.05`（下限 0.3）。
+2. `detector_quality`：对 `effectiveness()` 中 `horizon_s == 3600` 且 `n >= 20` 的探测器：`hit_rate < 0.40 and mean_ret < 0` → `detector_weights[d] = max(0.0, w - 0.25)`；`hit_rate >= 0.55 and mean_ret > 0` → `detector_weights[d] = min(1.5, w + 0.1)`。
+3. `loss_brake`：当日已实现盈亏 ≤ −2% × 当日起始权益（kv 缺失则跳过）→ `strategy_cfg.base_notional_usdt *= 0.5`（下限 20）且 `entry_threshold += 0.1`（上限 0.9）；当日 ≥ +2% 且 `base_notional_usdt < 100` → `base_notional_usdt = min(100, ×1.25)`。
+4. `overtrading_brake`：最近 `activity_window_s` 内决策数 ≥ 10 → `strategy_cfg.cooldown_s = min(3600, int(cooldown_s × 1.5))` 且 `entry_threshold += 0.05`（上限 0.9）。
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+def mk(st, clock=None, **kw): return AutoTuner(st, StrategyConfig(), DetectorConfig(), clock=clock or (lambda: T0.timestamp()), **kw)
+
+async def test_activity_floor_relaxes_thresholds_one_step(st):
+    t = mk(st); changes = await t.tick()
+    assert t.detector_cfg.liquidation_notional_threshold_usdt == Decimal("35000") and abs(t.detector_cfg.news_min_confidence - 0.55) < 1e-9
+    assert abs(t.strategy_cfg.entry_threshold - 0.55) < 1e-9 and {c.rule for c in changes} == {"activity_floor"}
+    assert len(await st.tuning_log(10)) == len(changes)
+
+async def test_activity_floor_respects_floors(st):
+    t = mk(st)
+    for _ in range(40): await t.tick()
+    assert t.detector_cfg.liquidation_notional_threshold_usdt >= Decimal("5000") and t.detector_cfg.news_min_confidence >= 0.3 - 1e-9 and t.strategy_cfg.entry_threshold >= 0.3 - 1e-9
+
+async def test_activity_floor_not_triggered_when_active(st):
+    for i in range(3): await st.insert_signal(make_signal(f"s{i}", created_at=T0 - timedelta(minutes=10)))
+    await st.insert_decision(make_decision_model(created_at=T0 - timedelta(minutes=5)))
+    assert [c for c in await mk(st).tick() if c.rule == "activity_floor"] == []
+
+async def test_detector_quality_disables_bad_and_boosts_good(st):
+    await seed_effectiveness(st, "funding_extreme", horizon_s=3600, n=25, hit_rate=0.3, mean_ret=-0.002)
+    await seed_effectiveness(st, "news_sentiment", horizon_s=3600, n=25, hit_rate=0.6, mean_ret=0.003)
+    t = mk(st); await t.tick()
+    assert abs(t.strategy_cfg.detector_weights["funding_extreme"] - 0.25) < 1e-9 and abs(t.strategy_cfg.detector_weights["news_sentiment"] - 1.1) < 1e-9
+
+async def test_detector_quality_ignores_small_samples(st):
+    await seed_effectiveness(st, "funding_extreme", horizon_s=3600, n=5, hit_rate=0.0, mean_ret=-0.01)
+    t = mk(st); await t.tick(); assert t.strategy_cfg.detector_weights["funding_extreme"] == 0.5
+
+async def test_loss_brake_halves_notional(st):
+    await st.set_kv("day_start_equity:2026-10-29", "10000")
+    await st.insert_fill(make_fill("c1", realized_pnl=Decimal("-250"), event_time=T0 - timedelta(hours=1)))
+    t = mk(st); await t.tick()
+    assert t.strategy_cfg.base_notional_usdt == Decimal("50") and abs(t.strategy_cfg.entry_threshold - 0.65) < 1e-9   # 0.6 − 0.05 (activity_floor) + 0.1
+
+async def test_overtrading_brake(st):
+    for i in range(10): await st.insert_decision(make_decision_model(created_at=T0 - timedelta(minutes=i)))
+    t = mk(st); await t.tick(); assert t.strategy_cfg.cooldown_s == 1350
+
+async def test_never_touches_risk_limits(st): ...  # AutoTuner 没有 RiskLimits 引用；断言 StrategyConfig/DetectorConfig 以外无字段被改（通过 tuning_log 的 field 前缀检查）
+```
+`seed_effectiveness(st, detector, *, horizon_s, n, hit_rate, mean_ret)` 与 `make_decision_model(created_at=...)` 放入 `tests/conftest.py`：前者插入 `n` 条信号及对应前瞻收益（`round(n*hit_rate)` 条正收益、其余负收益，均值等于 `mean_ret`），使 `effectiveness()` 产生给定的 `n`/`hit_rate`/`mean_ret`。
+
+- [ ] **Step 2: 运行确认失败**
+- [ ] **Step 3: 实现** — `autotune.py`；`Store` 新增表 `tuning_log(ts, rule, field, old, new, reason)` 与计数方法；`app.py` 在 `create_components` 中构造 `AutoTuner(store, settings.strategy, settings.detectors)` 并在 `App.run()` 中受监督地运行；`cli.py` 新增 `tuning`（打印最近 50 条调参记录）并在 `status` 中打印当前生效参数。确认 `SignalAggregator`、三个探测器、`ExecutionService` 均在使用时读取配置字段（若发现构造时缓存，改为属性访问并补一个回归测试）。
+- [ ] **Step 4: 运行通过** — `uv run pytest -q && uv run ruff check .`
+- [ ] **Step 5: 提交** — `git add -A && git commit -m "feat: auto-tuner adjusting thresholds and weights from live effectiveness"`
+
+---
+
+### Task 16: 夜间模拟盘启动与看门狗（控制器执行，不派发实施者）
+
+- [ ] **Step 1**: `uv run ai-trader probe` 通过；`uv run pytest -q` 全绿。
+- [ ] **Step 2**: 以独立进程启动模拟盘（PowerShell `Start-Process uv -ArgumentList run,ai-trader,run,--mode,paper -WindowStyle Hidden`，`stdout/stderr` 重定向到 `data/paper-run.log` / `data/paper-run.err.log`），启动前通过环境变量注入夜间配置：`NEWS__RSS_FEEDS`（账本中 14 个可达源的 JSON 数组）、`DETECTORS__NEWS_MIN_CONFIDENCE=0.3`、`DETECTORS__LIQUIDATION_NOTIONAL_THRESHOLD_USDT=10000`。
+- [ ] **Step 3**: 3 分钟后验证：`mark_samples` 增长、`news` 表有记录、日志无 Traceback、`ai-trader status` 正常；记录 PID 到 `data/paper-run.pid`。
+- [ ] **Step 4**: 会话内 cron 看门狗（每 45 分钟）：检查 PID 存活与 `mark_samples` 最近 5 分钟是否有新样本；若进程死亡或数据停滞 → 从 `data/paper-run.err.log` 取最后 40 行记入账本并重启；每次把 `status`/`signals`/`tuning` 摘要追加到 `data/overnight-report.md`。
+- [ ] **Step 5**: 最终消息告诉用户：如何看结果（`ai-trader status` / `signals` / `tuning`、`data/overnight-report.md`、日志路径）、如何停止（`taskkill /PID <pid> /T /F`）、如何加 X token 与切换 live。
+
+---
+
 ## 自检记录
 
 - 覆盖：设计稿 5.1→T1，5.2/5.3→T2，5.4→T3/T4，5.5→T6/T8，5.6→T7/T9，5.7→T10，5.8→T11，5.9→T11（Protocol）/T12，5.10→T5/T13，5.11→T13，第 6 节→各任务 + T14。
 - 类型一致：`Broker` Protocol 在 T11 声明（含 `open_order_symbols`）、T12 实现；`DailyBudget` 在 T8 定义（含 `refund`）、T9 复用；`EffectivenessRow` 在 T5 定义、T13 CLI 使用；`Store.count(table)` 在 T6 加入、T9/T10/T11 使用；`fake_ws_factory`、`FakeRest` 与各 `make_*` 构造函数集中在 `tests/conftest.py`。
 - Review Focus 五项分别对应 T3/T12、T12、T11、T11、T9 的具名测试。
+- 变更 2026-10-29 深夜：Task 9 改为 DeepSeek（用户提供 DEEPSEEK_API_KEY）；Task 13 的 create_components 改为 async 并加入组件监督器；新增 Task 15 AutoTuner（用户要求实测数据不好时自动调整策略）与 Task 16 夜间启动流程。
