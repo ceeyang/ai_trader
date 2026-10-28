@@ -3,7 +3,7 @@
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, date, datetime
 
 import httpx
 
@@ -14,6 +14,10 @@ log = logging.getLogger(__name__)
 
 _SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
 _DEFAULT_BACKOFF_S = 900
+
+
+def _utc_date(ts: float) -> date:
+    return datetime.fromtimestamp(ts, tz=UTC).date()
 
 
 class XSearchSource:
@@ -43,7 +47,7 @@ class XSearchSource:
         self._max_results = max_results
         self._clock = clock
         self._since_id: str | None = None
-        self._budget_warned = False
+        self._budget_warned_day: date | None = None
         self.next_allowed_at: float = 0.0
 
     async def fetch(self) -> list[NewsItem]:
@@ -51,9 +55,10 @@ class XSearchSource:
             return []
 
         if not self._budget.try_consume(self._max_results):
-            if not self._budget_warned:
+            today = _utc_date(self._clock())
+            if self._budget_warned_day != today:
                 log.warning("XSearchSource %r: daily budget exhausted, skipping fetch", self._query)
-                self._budget_warned = True
+                self._budget_warned_day = today
             return []
 
         params = {
@@ -91,16 +96,31 @@ class XSearchSource:
             log.warning("XSearchSource %r: unexpected status %s", self._query, response.status_code)
             return []
 
-        payload = response.json()
-        tweets = payload.get("data", [])
-        self._budget.refund(self._max_results - len(tweets))
+        # A single guard around decoding the body and pulling the shape we rely on: any
+        # failure here (invalid JSON, or a 200 body that isn't shaped like X's search
+        # response) must still refund the full `max_results` consumed above, since no
+        # usable result count was ever established.
+        try:
+            payload = response.json()
+            tweets = payload.get("data", [])
+            newest_id = payload.get("meta", {}).get("newest_id")
+            users = {u["id"]: u["username"] for u in payload.get("includes", {}).get("users", [])}
+        except (ValueError, AttributeError, TypeError, KeyError):
+            self._budget.refund(self._max_results)
+            log.warning("XSearchSource %r: malformed response body", self._query, exc_info=True)
+            return []
 
-        newest_id = payload.get("meta", {}).get("newest_id")
+        self._budget.refund(self._max_results - len(tweets))
         if newest_id is not None:
             self._since_id = newest_id
 
-        users = {u["id"]: u["username"] for u in payload.get("includes", {}).get("users", [])}
-        return [self._to_news_item(tweet, users) for tweet in tweets]
+        items = []
+        for tweet in tweets:
+            try:
+                items.append(self._to_news_item(tweet, users))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                log.warning("XSearchSource %r: skipping malformed tweet record", self._query, exc_info=True)
+        return items
 
     def _to_news_item(self, tweet: dict, users: dict[str, str]) -> NewsItem:
         tweet_id = tweet["id"]

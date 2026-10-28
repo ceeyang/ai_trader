@@ -109,6 +109,20 @@ async def test_x_source_budget_exhausted_warns_once(caplog):
     assert sum("budget exhausted" in r.message for r in caplog.records) == 1
 
 
+@respx.mock
+async def test_x_source_budget_exhausted_warns_again_after_utc_day_change(caplog):
+    respx.get("https://api.x.com/2/tweets/search/recent").mock(
+        return_value=httpx.Response(200, json=fxn("x_search.json"))
+    )
+    t = [1_700_000_000.0]
+    src = XSearchSource("T", "q", httpx.AsyncClient(), DailyBudget(0, clock=lambda: t[0]), max_results=10, clock=lambda: t[0])
+    with caplog.at_level(logging.WARNING):
+        await src.fetch()
+        t[0] += 86400
+        await src.fetch()
+    assert sum("budget exhausted" in r.message for r in caplog.records) == 2
+
+
 def test_daily_budget_resets_on_utc_day_change():
     t = [1_700_000_000.0]
     b = DailyBudget(2, clock=lambda: t[0])
@@ -172,6 +186,32 @@ async def test_x_source_transport_error_refunds_budget():
     budget = DailyBudget(10)
     src = XSearchSource("T", "q", httpx.AsyncClient(), budget, max_results=10)
     assert await src.fetch() == [] and budget.remaining == 10
+
+
+@respx.mock
+async def test_x_source_malformed_json_body_refunds_budget():
+    respx.get("https://api.x.com/2/tweets/search/recent").mock(
+        return_value=httpx.Response(200, content=b"not json at all")
+    )
+    budget = DailyBudget(10)
+    src = XSearchSource("T", "q", httpx.AsyncClient(), budget, max_results=10)
+    assert await src.fetch() == [] and budget.remaining == 10
+
+
+@respx.mock
+async def test_x_source_skips_malformed_tweet_but_keeps_valid_ones():
+    payload = {
+        "data": [
+            {"id": "1", "text": "valid tweet", "author_id": "u1", "created_at": "2026-10-29T00:00:00.000Z"},
+            {"id": "2", "text": "missing created_at", "author_id": "u1"},
+        ],
+        "includes": {"users": [{"id": "u1", "username": "binance"}]},
+        "meta": {"newest_id": "2", "oldest_id": "1", "result_count": 2},
+    }
+    respx.get("https://api.x.com/2/tweets/search/recent").mock(return_value=httpx.Response(200, json=payload))
+    src = XSearchSource("T", "q", httpx.AsyncClient(), DailyBudget(100), max_results=10)
+    items = await src.fetch()
+    assert len(items) == 1 and items[0].id == "x:1"
 
 
 @respx.mock
