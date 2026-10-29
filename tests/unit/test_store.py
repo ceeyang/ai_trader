@@ -95,3 +95,11 @@ async def test_open_migrates_not_null_forward_returns(tmp_path):
     await st.insert_forward_return("s1", 600, None)
     assert await st.effectiveness() == []
     await st.close()
+
+
+async def test_consecutive_losses_ignores_zero_written_with_decimals(tmp_path):
+    st = Store(tmp_path / "t.db"); await st.open()
+    for i, pnl in enumerate(["-1", "-2", "0.00000000", "0E-8"]):
+        await st.insert_fill(make_fill(f"c{i}", realized_pnl=Decimal(pnl), event_time=T0 + timedelta(minutes=i)))
+    assert await st.consecutive_losses() == 2  # "0.00000000" / "0E-8" are zero, not wins
+    await st.close()

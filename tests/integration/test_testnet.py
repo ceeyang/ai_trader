@@ -55,9 +55,12 @@ async def test_place_far_limit_then_cancel():
                 time_in_force="GTC",
             )
         )
-        assert placed.status == OrderStatus.NEW
-
-        cancelled = await rest.cancel_order("BTCUSDT", client_order_id=client_order_id)
+        try:
+            assert placed.status == OrderStatus.NEW
+        finally:
+            # Always attempt the cancel, even if the NEW assertion failed: never leave
+            # a resting order on the testnet account.
+            cancelled = await rest.cancel_order("BTCUSDT", client_order_id=client_order_id)
         assert cancelled.status == OrderStatus.CANCELED
     finally:
         await rest.aclose()

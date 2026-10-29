@@ -36,7 +36,6 @@ BULLISH_TERMS: tuple[str, ...] = (
 )
 
 BEARISH_TERMS: tuple[str, ...] = (
-    "sec",
     "lawsuit",
     "sues",
     "hack",

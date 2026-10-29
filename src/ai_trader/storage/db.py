@@ -582,7 +582,7 @@ class Store:
 
     async def consecutive_losses(self) -> int:
         cur = await self._conn.execute(
-            "SELECT realized_pnl FROM fills WHERE realized_pnl != '0' ORDER BY event_time DESC"
+            "SELECT realized_pnl FROM fills WHERE CAST(realized_pnl AS REAL) != 0 ORDER BY event_time DESC"
         )
         rows = await cur.fetchall()
         count = 0
@@ -645,7 +645,7 @@ class Store:
             (ts.astimezone(UTC).isoformat(),),
         )
         row = await cur.fetchone()
-        return row[0]
+        return row[0] if row is not None else 0
 
     # ---- misc (beyond 5.10, used by later tasks' tests) ------------------
 
@@ -654,4 +654,4 @@ class Store:
             raise ValueError(f"unknown table: {table}")
         cur = await self._conn.execute(f"SELECT COUNT(*) FROM {table}")
         row = await cur.fetchone()
-        return row[0]
+        return row[0] if row is not None else 0

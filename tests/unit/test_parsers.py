@@ -142,3 +142,22 @@ def test_parse_order_trade_update_new_has_no_fill():
 def test_parse_account_update_positions_and_balance():
     upd = parse_account_update(fx("ws_account_update.json"))
     assert upd.state.total_wallet_balance == Decimal("10001.2") and upd.state.positions[0].side == PositionSide.LONG
+
+
+def test_parse_exchange_info_skips_symbols_missing_filters(caplog):
+    import logging
+    from decimal import Decimal as D
+
+    from ai_trader.exchange.binance.parsers import parse_exchange_info
+
+    def sym(name, filters):
+        return {"symbol": name, "contractType": "PERPETUAL", "status": "TRADING",
+                "pricePrecision": 2, "quantityPrecision": 3, "filters": filters}
+
+    price = {"filterType": "PRICE_FILTER", "tickSize": "0.10"}
+    lot = {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"}
+    raw = {"symbols": [sym("NOPRICE", [lot]), sym("NOLOT", [price]), sym("NOMIN", [price, lot])]}
+    with caplog.at_level(logging.WARNING):
+        info = parse_exchange_info(raw)
+    assert set(info.symbols) == {"NOMIN"} and info.symbols["NOMIN"].min_notional == D(0)
+    assert "NOPRICE" in caplog.text and "NOLOT" in caplog.text and "MIN_NOTIONAL" in caplog.text

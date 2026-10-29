@@ -1,5 +1,6 @@
 """Pure functions turning raw Binance payloads into domain models (design 5.4)."""
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -20,6 +21,8 @@ from ai_trader.models import (
     Side,
     utc_now,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _ms(ms: int | str) -> datetime:
@@ -48,15 +51,24 @@ def _bool(value: Any) -> bool:
 
 
 def parse_exchange_info(raw: dict) -> ExchangeInfo:
-    """Keep only PERPETUAL contracts in TRADING status."""
+    """Keep only PERPETUAL contracts in TRADING status. A symbol missing PRICE_FILTER or
+    LOT_SIZE is skipped (logged) rather than failing the whole load; a missing
+    MIN_NOTIONAL is treated as 0 (logged)."""
     symbols: dict[str, SymbolFilters] = {}
     for s in raw.get("symbols", []):
         if s.get("contractType") != "PERPETUAL" or s.get("status") != "TRADING":
             continue
         by_type = {f["filterType"]: f for f in s.get("filters", [])}
-        price_f = by_type["PRICE_FILTER"]
-        lot_f = by_type["LOT_SIZE"]
-        notional_f = by_type.get("MIN_NOTIONAL", {})
+        price_f = by_type.get("PRICE_FILTER")
+        lot_f = by_type.get("LOT_SIZE")
+        if price_f is None or lot_f is None:
+            missing = [n for n, f in (("PRICE_FILTER", price_f), ("LOT_SIZE", lot_f)) if f is None]
+            log.warning("exchange info: skipping %s, missing %s", s.get("symbol"), ",".join(missing))
+            continue
+        notional_f = by_type.get("MIN_NOTIONAL")
+        if notional_f is None:
+            log.warning("exchange info: %s has no MIN_NOTIONAL filter; treating it as 0", s.get("symbol"))
+            notional_f = {}
         symbols[s["symbol"]] = SymbolFilters(
             symbol=s["symbol"],
             tick_size=_dec(price_f["tickSize"]),
