@@ -31,6 +31,21 @@ def test_cli_run_live_mainnet_requires_confirm(monkeypatch):
     assert r.exit_code == 2 and "--confirm-mainnet" in r.output
 
 
+def test_cli_run_requires_confirm_for_mainnet_url_override(monkeypatch):
+    monkeypatch.setenv("BINANCE_TESTNET", "true")
+    monkeypatch.setenv("BINANCE_REST_URL", "https://fapi.binance.com")
+    r = CliRunner().invoke(app, ["run", "--mode", "paper"])
+    assert r.exit_code == 2 and "--confirm-mainnet" in r.output and "fapi.binance.com" in r.output
+
+
+def test_settings_targets_testnet():
+    from ai_trader.settings import Settings
+
+    assert Settings(_env_file=None).targets_testnet
+    assert not Settings(_env_file=None, binance_testnet=False).targets_testnet
+    assert not Settings(_env_file=None, binance_ws_url="wss://fstream.binance.com").targets_testnet
+
+
 async def _seed(path):
     st = Store(path)
     await st.open()

@@ -271,3 +271,16 @@ async def test_stale_stop_flag_is_cleared_at_start(tmp_path, exchange_info):
     assert not task.done()
     await app.stop()
     await asyncio.wait_for(task, 5)
+
+
+async def test_create_components_rejects_leverage_above_risk_cap(tmp_path, exchange_info):
+    import pytest
+
+    from ai_trader.settings import RiskLimits
+
+    s = Settings(_env_file=None, mode="paper", db_path=tmp_path / "a.db", llm=LLMConfig(enabled=False),
+                 leverage=5, risk=RiskLimits(max_leverage=3))
+    http = _http()
+    with pytest.raises(SystemExit, match="MAX_LEVERAGE"):
+        await create_components(s, rest=FakeRest(exchange_info), ws_factory=fake_ws_factory, http=http)
+    await http.aclose()

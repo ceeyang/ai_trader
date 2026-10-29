@@ -63,7 +63,7 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 | `version` | 打印版本号 |
 | `probe` | 检查与配置端点的连通性（ping、服务器时间偏移、合约数、各 symbol 标记价与年化资金费率；有 key 时打印余额） |
 | `classify TEXT` | 把 `TEXT` 当作一条新闻，跑一遍情绪分类器（有 `DEEPSEEK_API_KEY` 用 DeepSeek，否则用关键词兜底），打印 JSON |
-| `run [--mode paper\|live] [--confirm-mainnet]` | 启动交易守护进程直到被中断；`--mode` 覆盖 `.env` 里的 `MODE`；`BINANCE_TESTNET=false` 时必须加 `--confirm-mainnet`，否则退出码 2 |
+| `run [--mode paper\|live] [--confirm-mainnet]` | 启动交易守护进程直到被中断；`--mode` 覆盖 `.env` 里的 `MODE`；只要 REST/WS 端点不是测试网域名（`testnet.binancefuture.com` / `stream.binancefuture.com`）就必须加 `--confirm-mainnet`（不论 `BINANCE_TESTNET` 取值，`BINANCE_REST_URL`/`BINANCE_WS_URL` 覆盖同样适用），否则退出码 2；`LEVERAGE` 大于 `RISK__MAX_LEVERAGE` 时拒绝启动 |
 | `kill [--reset]` | 设置持久化杀开关（kv `kill_switch=1`）；live 模式下本命令同时撤销所有挂单并平掉所有持仓（任何 symbol 撤单/平仓失败都会逐条打印并以退出码 1 结束）；正在运行的守护进程（paper 或 live）在 ~15 s 内观察到该标志并对自己的 broker 执行一次全平。`--reset` 清除杀开关（kv `kill_switch=0`）并打印新状态 |
 | `stop` | 请求正在运行的守护进程优雅退出（kv `stop_requested=1`），守护进程在 ~15 s 内停止并把标志复位为 0 |
 | `status` | 打印杀开关状态、当日已实现盈亏、各表计数、当前生效的自动调参参数、最近 10 条信号；paper 模式打印模拟账户，live 模式打印真实持仓/挂单 |

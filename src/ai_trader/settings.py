@@ -3,6 +3,7 @@
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -11,6 +12,7 @@ TESTNET_REST = "https://testnet.binancefuture.com"
 TESTNET_WS = "wss://stream.binancefuture.com"
 MAINNET_REST = "https://fapi.binance.com"
 MAINNET_WS = "wss://fstream.binance.com"
+TESTNET_HOSTS = frozenset({"testnet.binancefuture.com", "stream.binancefuture.com"})
 
 
 class RiskLimits(BaseModel):
@@ -118,3 +120,10 @@ class Settings(BaseSettings):
         if self.binance_ws_url:
             return self.binance_ws_url
         return TESTNET_WS if self.binance_testnet else MAINNET_WS
+
+    @property
+    def targets_testnet(self) -> bool:
+        """True only when both effective endpoints are Binance futures testnet hosts —
+        whatever `binance_testnet` says (an explicit URL override wins)."""
+        hosts = {urlparse(self.effective_rest_url).hostname, urlparse(self.effective_ws_url).hostname}
+        return hosts <= TESTNET_HOSTS

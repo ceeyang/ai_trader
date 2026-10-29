@@ -139,6 +139,10 @@ async def create_components(
     secret = _secret(settings.binance_api_secret)
     if settings.mode == "live" and not (key and secret):
         raise SystemExit("live 模式需要 BINANCE_API_KEY/BINANCE_API_SECRET")
+    if settings.leverage > settings.risk.max_leverage:
+        raise SystemExit(
+            f"LEVERAGE={settings.leverage} exceeds RISK__MAX_LEVERAGE={settings.risk.max_leverage}"
+        )
 
     own_rest, own_http = rest is None, http is None
     rest = rest or BinanceFuturesRest(settings.effective_rest_url, key, secret)

@@ -152,7 +152,7 @@ async def _run(settings) -> None:
 @app.command()
 def run(
     mode: str | None = typer.Option(None, "--mode", help="paper | live (overrides MODE)"),
-    confirm_mainnet: bool = typer.Option(False, "--confirm-mainnet", help="required when BINANCE_TESTNET=false"),
+    confirm_mainnet: bool = typer.Option(False, "--confirm-mainnet", help="required whenever the REST/WS endpoints are not the Binance futures testnet"),
 ) -> None:
     """Run the trading system until interrupted."""
     from ai_trader.logging_setup import configure_logging
@@ -165,9 +165,10 @@ def run(
             raise typer.Exit(2)
         settings = settings.model_copy(update={"mode": mode})
     configure_logging(settings.log_level, settings.log_json)
-    if not settings.binance_testnet and not confirm_mainnet:
+    if not settings.targets_testnet and not confirm_mainnet:
         print(
-            "BINANCE_TESTNET=false points at Binance MAINNET (real funds). "
+            f"endpoints {settings.effective_rest_url} / {settings.effective_ws_url} are not the Binance "
+            "futures testnet (MAINNET means real funds). "
             "Re-run with --confirm-mainnet if that is really intended."
         )
         raise typer.Exit(2)
