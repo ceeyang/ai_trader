@@ -283,3 +283,22 @@ async def test_position_mode_reads_dual_side_flag():
     assert await rest.position_mode() is True
     assert "signature=" in str(route.calls.last.request.url)
     await rest.aclose()
+
+
+
+@respx.mock
+async def test_failed_expiry_rotation_is_retried_with_backoff(bus, exchange_info):
+    respx.post(f"{BASE}/fapi/v1/listenKey").mock(side_effect=[
+        httpx.Response(200, json={"listenKey": "LK1"}),
+        httpx.Response(503, json={"code": -1001, "msg": "down"}),
+        httpx.Response(200, json={"listenKey": "LK2"}),
+    ])
+    respx.get(f"{BASE}/fapi/v2/positionRisk").mock(return_value=httpx.Response(200, json=[]))
+    respx.delete(f"{BASE}/fapi/v1/listenKey").mock(return_value=httpx.Response(200, json={}))
+    _one_way()
+    br = _broker(bus, exchange_info, reconcile_interval_s=3600, backoff_s=(0.01,))
+    await br.start()
+    await fake_ws_factory.handlers["wss://x/ws/LK1"]({"e": "listenKeyExpired", "E": 1})
+    assert await _until(lambda: br._listen_key == "LK2")
+    assert br._ws.url == "wss://x/ws/LK2"
+    await br.stop()

@@ -159,6 +159,10 @@ class PaperBroker:
             return mp.mark_price
         return self._event_marks.get(symbol)
 
+    def can_close(self, symbol: str) -> bool:
+        """Whether `close_position(symbol)` can fill now (it needs a mark price)."""
+        return self._mark(symbol) is not None
+
     def _position(self, symbol: str, p: _Pos) -> Position:
         side = PositionSide.LONG if p.qty > 0 else PositionSide.SHORT
         qty = abs(p.qty)

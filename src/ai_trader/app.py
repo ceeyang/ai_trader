@@ -393,14 +393,20 @@ class App:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stopping.wait(), timeout=self._control_interval_s)
 
+    def _marks_fresh(self) -> bool:
+        c = self.c
+        limit = c.settings.risk.max_data_staleness_s
+        for symbol in c.settings.symbols:
+            age = c.state.age_s(symbol)
+            if age is None or age > limit:
+                return False
+        return True
+
     async def _check_control(self) -> None:
         c = self.c
         if await c.store.get_kv(KILL_KV_KEY) == "1":
             if not self._kill_handled:
-                self._kill_handled = True
-                if not c.kill_switch.triggered:
-                    log.error("kill flag observed in kv; flattening the in-process broker")
-                    await c.kill_switch.trigger("kill flag observed")
+                await self._handle_kill_flag()
         else:
             # Reset (e.g. `ai-trader kill --reset`): a later kill acts again.
             self._kill_handled = False
@@ -414,6 +420,26 @@ class App:
                 # for this very task.
                 self._stopping.set()
                 await self._stop_components()
+
+    async def _handle_kill_flag(self) -> None:
+        """Flatten the in-process broker for an observed kv kill flag. Waits for a fresh
+        mark on every symbol first (at boot, restored paper positions cannot be closed
+        before marks arrive), and counts as handled only once a sweep finished cleanly or
+        left no position; otherwise the next control pass retries."""
+        c = self.c
+        ks = c.kill_switch
+        if not self._marks_fresh():
+            log.warning("kill flag set; waiting for fresh marks on all symbols before flattening")
+            return
+        if not (ks.triggered and not ks.last_errors):
+            log.error("kill flag observed in kv; flattening the in-process broker")
+            await ks.trigger("kill flag observed")
+        if not ks.last_errors or not c.broker.positions_snapshot():
+            self._kill_handled = True
+        else:
+            log.error(
+                "kill sweep incomplete (%s); retrying on the next control pass", "; ".join(ks.last_errors)
+            )
 
     # ---- health -----------------------------------------------------------
 

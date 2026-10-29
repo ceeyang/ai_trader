@@ -292,3 +292,32 @@ async def test_kill_switch_sweeps_even_if_flag_write_fails():
     assert broker.closed == ["BTCUSDT"] and ks.triggered
     assert any("persist flag" in e for e in ks.last_errors)
     assert any("BTCUSDT cancel_all" in e for e in ks.last_errors)
+
+
+
+async def test_kill_switch_leaves_symbol_untouched_when_broker_cannot_close(st):
+    class FakeBroker:
+        def __init__(self):
+            self.calls = []
+
+        def can_close(self, symbol):
+            return False
+
+        async def positions(self):
+            return {"BTCUSDT": make_position(PositionSide.LONG, Decimal("0.002"), Decimal(80000))}
+
+        async def open_order_symbols(self):
+            return {"BTCUSDT", "ETHUSDT"}
+
+        async def cancel_all(self, s):
+            self.calls.append(("cancel_all", s))
+
+        async def close_position(self, s):
+            self.calls.append(("close_position", s))
+
+    broker = FakeBroker()
+    ks = KillSwitch(st, broker, EventBus())
+    await ks.trigger("test")
+    # BTCUSDT (position, not closable) is untouched; ETHUSDT (orders only) is cancelled.
+    assert broker.calls == [("cancel_all", "ETHUSDT")]
+    assert ks.last_errors and "BTCUSDT" in ks.last_errors[0]

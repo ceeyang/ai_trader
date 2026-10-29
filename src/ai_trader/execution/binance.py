@@ -244,14 +244,24 @@ class BinanceFuturesBroker:
     def _spawn_rotation(self, reason: str) -> None:
         # Not awaited inline: the caller is the old stream's own message handler, which
         # the rotation stops.
-        task = asyncio.create_task(self._rotate_listen_key(reason), name="binance-listen-key-rotate")
+        task = asyncio.create_task(self._rotate_with_retry(reason), name="binance-listen-key-rotate")
         self._rotations.add(task)
-        task.add_done_callback(self._rotation_done)
+        task.add_done_callback(self._rotations.discard)
 
-    def _rotation_done(self, task: asyncio.Task) -> None:
-        self._rotations.discard(task)
-        if not task.cancelled() and task.exception() is not None:
-            log.error("listen key rotation failed: %r; the keepalive loop will retry", task.exception())
+    async def _rotate_with_retry(self, reason: str) -> None:
+        """Rotate, retrying with backoff (`backoff_s`, the last delay repeating) until it
+        works or the broker stops: an expired key must not wait 30 min for the keepalive."""
+        attempt = 0
+        while not self._stopping.is_set():
+            try:
+                await self._rotate_listen_key(reason)
+                return
+            except Exception:
+                delay = self._backoff_s[min(attempt, len(self._backoff_s) - 1)]
+                log.exception("listen key rotation failed; retrying in %.0f s", delay)
+            attempt += 1
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=delay)
 
     async def _reconcile_loop(self) -> None:
         while not self._stopping.is_set():

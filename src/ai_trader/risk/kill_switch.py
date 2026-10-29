@@ -74,7 +74,15 @@ class KillSwitch:
 
     async def _flatten(self, symbol: str, *, has_position: bool) -> None:
         """Cancel and close are independent attempts: a failed cancel must not skip the
-        close, and either failing must not stop the rest of the sweep."""
+        close, and either failing must not stop the rest of the sweep. A broker that can
+        tell it cannot close `symbol` right now (`can_close`, e.g. paper without a mark)
+        leaves that symbol untouched — its SL/TP keep protecting the position — and the
+        failure is recorded so the caller can retry."""
+        can_close = getattr(self._broker, "can_close", None)
+        if has_position and can_close is not None and not can_close(symbol):
+            log.error("kill switch: %s cannot be closed yet; leaving its protective orders resting", symbol)
+            self.last_errors.append(f"{symbol} close_position: not closable yet (no mark price)")
+            return
         try:
             await self._broker.cancel_all(symbol)
         except Exception as exc:

@@ -123,6 +123,10 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 - live 模式下 `kill` 命令本身会撤销所有挂单并市价平掉所有持仓，失败项逐条打印并以退出码 1 结束。
 - 正在运行的守护进程每 15 s 检查一次 kv：看到 `kill_switch=1` 时对进程内的 broker 执行一次
   `KillSwitch.trigger`（paper 模式下模拟仓位就是这样被平掉的），每次激活只执行一次。
+- 启动时若 kv 里遗留着 `kill_switch=1`：守护进程**要等所有 symbol 都收到新鲜标记价**（不超过
+  `RISK__MAX_DATA_STALENESS_S`）才执行全平，在此之前恢复出来的仓位及其止损/止盈挂单保持不动。某个 symbol
+  暂时无法平仓时，该 symbol 的止损/止盈不会被撤销；只要全平没有干净完成（且仍有持仓），下一轮控制检查
+  （15 s 后）就会重试。
 - `uv run ai-trader kill --reset`：清除杀开关（kv `kill_switch=0`），恢复开仓。
 - `uv run ai-trader stop`：写入 kv `stop_requested=1`，守护进程 ~15 s 内优雅退出并把标志复位；启动时若发现
   遗留的 `stop_requested=1` 会先清除，避免一启动就退出。

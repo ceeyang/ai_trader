@@ -204,6 +204,10 @@ class CountingKillSwitch:
         self.calls.append(reason)
         await self._real.trigger(reason)
 
+    @property
+    def last_errors(self) -> list[str]:
+        return self._real.last_errors
+
     async def is_active(self) -> bool:
         return await self._real.is_active()
 
@@ -230,6 +234,7 @@ async def test_control_loop_triggers_kill_switch_once_and_flattens(tmp_path, exc
     task = asyncio.create_task(app.run())
     assert await _wait_for(lambda: c.store._db is not None)
     c.state.update_mark(make_mark_price(mark=Decimal(80000)))
+    c.state.update_mark(make_mark_price(symbol="ETHUSDT", mark=Decimal(3000)))
     await c.broker.submit(OrderRequest(symbol="BTCUSDT", side=Side.BUY, type=OrderType.MARKET,
                                        quantity=Decimal("0.002"), client_order_id="ait-k"))
     await c.store.set_kv("kill_switch", "1")
@@ -284,3 +289,92 @@ async def test_create_components_rejects_leverage_above_risk_cap(tmp_path, excha
     with pytest.raises(SystemExit, match="MAX_LEVERAGE"):
         await create_components(s, rest=FakeRest(exchange_info), ws_factory=fake_ws_factory, http=http)
     await http.aclose()
+
+
+
+async def _paper_position_with_protection(c):
+    """Open a BTCUSDT paper position with a resting SL/TP pair, then drop every mark so
+    the state looks like a fresh boot with restored positions."""
+    from decimal import Decimal
+
+    from conftest import make_mark_price
+
+    from ai_trader.data.market_state import MarketState
+    from ai_trader.models import OrderRequest, OrderType, Side
+
+    await c.store.open()
+    await c.broker.start()
+    c.state.update_mark(make_mark_price(mark=Decimal(80000)))
+    await c.broker.submit(OrderRequest(symbol="BTCUSDT", side=Side.BUY, type=OrderType.MARKET,
+                                       quantity=Decimal("0.002"), client_order_id="ait-e"))
+    for cid, typ, px in (("ait-sl", OrderType.STOP_MARKET, "79000.0"),
+                         ("ait-tp", OrderType.TAKE_PROFIT_MARKET, "82000.0")):
+        await c.broker.submit(OrderRequest(symbol="BTCUSDT", side=Side.SELL, type=typ,
+                                           stop_price=Decimal(px), close_position=True, client_order_id=cid))
+    fresh = MarketState()  # no marks yet, as right after a restart
+    c.state = fresh
+    c.broker._state = fresh
+    c.broker._event_marks.clear()
+    return fresh
+
+
+async def test_leftover_kill_flag_waits_for_fresh_marks_then_flattens(tmp_path, exchange_info):
+    from decimal import Decimal
+
+    from conftest import make_mark_price
+
+    c = await _components(tmp_path, exchange_info)
+    state = await _paper_position_with_protection(c)
+    await c.store.set_kv("kill_switch", "1")
+    ks = CountingKillSwitch(c.kill_switch)
+    c.kill_switch = ks
+    app = App(c)
+
+    await app._check_control()  # boot: no marks -> nothing touched
+    assert ks.calls == [] and not app._kill_handled
+    assert set(c.broker._pending) == {"ait-sl", "ait-tp"}
+    assert "BTCUSDT" in c.broker.positions_snapshot()
+
+    state.update_mark(make_mark_price(mark=Decimal(80000)))
+    await app._check_control()  # ETHUSDT still has no mark
+    assert ks.calls == []
+
+    state.update_mark(make_mark_price(symbol="ETHUSDT", mark=Decimal(3000)))
+    await app._check_control()
+    assert ks.calls == ["kill flag observed"] and app._kill_handled
+    assert c.broker.positions_snapshot() == {} and c.broker._pending == {}
+    await app._check_control()  # handled: no second sweep
+    assert len(ks.calls) == 1
+    await c.store.close()
+    await c.http.aclose()
+
+
+async def test_kill_sweep_with_failing_close_keeps_protection_and_retries(tmp_path, exchange_info):
+    from decimal import Decimal
+
+    from conftest import make_mark_price
+
+    c = await _components(tmp_path, exchange_info)
+    state = await _paper_position_with_protection(c)
+    await c.store.set_kv("kill_switch", "1")
+    ks = CountingKillSwitch(c.kill_switch)
+    c.kill_switch = ks
+    app = App(c)
+    # Marks look fresh to the control loop, but the broker cannot price BTCUSDT yet.
+    real_can_close = c.broker.can_close
+    c.broker.can_close = lambda symbol: False
+    state.update_mark(make_mark_price(mark=Decimal(80000)))
+    state.update_mark(make_mark_price(symbol="ETHUSDT", mark=Decimal(3000)))
+
+    await app._check_control()
+    assert ks.calls == ["kill flag observed"] and not app._kill_handled
+    assert set(c.broker._pending) == {"ait-sl", "ait-tp"}  # SL/TP still resting
+    assert "BTCUSDT" in c.broker.positions_snapshot()
+    assert any("not closable" in e for e in ks.last_errors)
+
+    c.broker.can_close = real_can_close
+    await app._check_control()  # retried on the next pass
+    assert len(ks.calls) == 2 and app._kill_handled
+    assert c.broker.positions_snapshot() == {} and c.broker._pending == {}
+    await c.store.close()
+    await c.http.aclose()
