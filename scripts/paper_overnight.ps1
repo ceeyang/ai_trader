@@ -21,6 +21,9 @@ $env:DETECTORS__NEWS_MIN_CONFIDENCE = "0.3"
 $env:DETECTORS__LIQUIDATION_NOTIONAL_THRESHOLD_USDT = "10000"
 $env:LOG_JSON = "false"
 $env:LOG_LEVEL = "INFO"
+# Paper-only: the consecutive-loss stop has no time window and only resets on a winning fill, which
+# cannot happen once OPENs are blocked; relax it for the data-collection run (daily-loss 5% still applies).
+$env:RISK__MAX_CONSECUTIVE_LOSSES = "8"
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $log = Join-Path $Repo "data\paper-run-$stamp.log"
