@@ -1,6 +1,6 @@
 # ai_trader v2：币安 USDT 本位合约事件驱动交易系统（测试网优先）设计稿
 
-日期：2026-10-29 | 分支：`futures-rewrite`（孤儿分支，旧代码保留在 `main`） | 状态：用户选择跳过需求问答，以下所有选型均为 Claude 的决定，标注为 **[我的决定]**，用户可随时推翻。
+日期：2026-10-29 | 分支：`futures-rewrite`（孤儿分支，旧代码保留在 `main`） | 状态：用户选择跳过需求问答，以下所有选型均为设计者（AI 助手）的决定，标注为 **[我的决定]**，用户可随时推翻。
 
 ---
 
@@ -33,7 +33,7 @@
 1. 单进程 asyncio 守护进程，打通闭环：行情 → 探测器 → 信号 → 聚合 → 风控 → 下单 → 成交回报 → 对账。
 2. 币安 USDT 本位合约 REST（签名）+ WebSocket（行情流 + 用户数据流）客户端，测试网可用，主网仅换 URL。
 3. 新闻/社交接入：RSS（免费）+ X API v2 近期搜索（按量付费，带每日读取预算）。
-4. 利多/利空判断：Claude 结构化输出分类器，附关键词规则兜底，带每日调用预算。
+4. 利多/利空判断：DeepSeek（JSON 输出）分类器，附关键词规则兜底，带每日调用预算。
 5. 两个纯行情探测器（资金费率极端、清算爆发）作为不依赖外部付费服务的基线信号。
 6. 独立风控引擎 + 杀开关；模拟经纪商（paper）与币安经纪商（live）同一接口。
 7. SQLite 落库：新闻、情绪、信号、前瞻收益、决策、风控裁决、订单、成交；CLI 查看信号有效性表。
@@ -56,7 +56,7 @@
 
 - Python ≥ 3.12，`uv` 管理，`src/` 布局，包名仍为 `ai_trader`，全异步。
 - 价格与数量全程 `Decimal`；时间全程 tz-aware UTC。
-- 依赖 **[我的决定]**：`httpx`（REST）、`websockets`（WS）、`pydantic` v2 + `pydantic-settings`（模型与配置，`.env`）、`anthropic`（分类器）、`aiosqlite`（存储）、`typer`（CLI）、`feedparser`（RSS）。开发：`pytest`、`pytest-asyncio`、`respx`、`ruff`、`mypy`。
+- 依赖 **[我的决定]**：`httpx`（REST）、`websockets`（WS）、`pydantic` v2 + `pydantic-settings`（模型与配置，`.env`）、DeepSeek 分类器（OpenAI 兼容 HTTP 接口，经 `httpx` 直接调用，不引入 LLM SDK）、`aiosqlite`（存储）、`typer`（CLI）、`feedparser`（RSS）。开发：`pytest`、`pytest-asyncio`、`respx`、`ruff`、`mypy`。
 - LLM 分类器 **[用户决定 2026-10-29 深夜]**：DeepSeek（用户提供 `DEEPSEEK_API_KEY`）。OpenAI 兼容 `POST https://api.deepseek.com/chat/completions`，`model="deepseek-chat"`，`response_format={"type":"json_object"}`，`temperature=0`，`max_tokens=512`，用项目已有 `httpx` 调用，不引入额外 SDK；任何失败退化为关键词分类器。
 - X 搜索每次 `max_results` 默认 10，轮询 120 s，每日读取预算默认 2000 条（约 10 美元/天上限）。
 - 单元测试禁止真实网络；WS 测试用本机回环假服务器。
@@ -69,7 +69,7 @@
  Binance WS ──► MarketFeed ──► MarkPrice / Kline / Liquidation ──► FundingExtremeDetector ─┐                 │
    (testnet)       │                                             LiquidationBurstDetector ─┤                 │
                    └─► MarketState（最新标记价、新鲜度）         NewsSentimentDetector ────┼─► Signal ──► SignalAggregator ──► Decision
- RSS / X API ──► NewsPoller ──► NewsItem ──► ClaudeClassifier(→KeywordClassifier 兜底) ───┘       │                         │
+ RSS / X API ──► NewsPoller ──► NewsItem ──► DeepSeekClassifier(→KeywordClassifier 兜底) ───┘       │                         │
                                                                                                  Store(SQLite)        RiskEngine ──► RiskVerdict
  StalenessWatchdog ──► DataStale / DataFresh                                                                                │
  KillSwitch ──► KillSwitchTriggered                                                                             ExecutionService
@@ -286,7 +286,7 @@ class Broker(Protocol):
 
 `async create_components(settings, *, rest=None, ws_factory=None, http=None, store=None) -> Components`（`settings.leverage > settings.risk.max_leverage` → `SystemExit`；内部 `await rest.exchange_info()`；`http` 为 RSS/X/DeepSeek 共用客户端）（dataclass，持有全部组件，便于测试注入）；`App(components).run()`：`store.open` → `bus.start` → `broker.start` → 启动 feed/watchdog/sampler/poller/aggregator/execution/tracker/reconcile 任务 → 每 60 s 健康日志（WS 年龄、信号数、持仓、杀开关、因过旧跳过的新闻数）→ 每 15 s 控制循环读 kv：`kill_switch == "1"` 且本进程本次激活尚未执行 → `kill_switch.trigger("kill flag observed")`（一次）；`stop_requested == "1"` → 复位为 "0" 并停止（启动时清除遗留的 `stop_requested`）；杀开关激活期间 `enforce_max_hold` 不发 CLOSE 决策→ SIGINT/SIGTERM 优雅停止（反序停、关 listenKey、关 DB）。每个长期组件由监督器运行：抛出 `Exception` 时记录并按 1/2/5/10/30 s 退避重启，单个组件崩溃不得终止进程。
 
-CLI（typer，脚本名 `ai-trader`）：`tuning`（最近 50 条自动调参记录）、`probe`（ping、服务器时间与本地偏移、合约数、各 symbol 标记价与年化资金费；有 key 时打印余额）、`run [--mode paper|live] [--confirm-mainnet]`（`effective_rest_url` 或 `effective_ws_url` 的主机不是测试网主机 `testnet.binancefuture.com`/`stream.binancefuture.com`（`Settings.targets_testnet` 为 False，与 `binance_testnet` 取值无关）且无 `--confirm-mainnet` → 退出码 2 并说明）、`kill [--reset]`（`--reset` → `KillSwitch.reset`，kv `kill_switch=0`；live 模式下任一 symbol 全平失败 → 逐条打印并退出码 1）、`stop`（kv `stop_requested=1`，守护进程 ~15 s 内退出）、`status`（持仓、挂单、当日已实现盈亏、杀开关、最近 10 条信号）、`signals`（有效性表）、`classify TEXT`（有 Anthropic 凭据用 Claude，否则关键词）。
+CLI（typer，脚本名 `ai-trader`）：`tuning`（最近 50 条自动调参记录）、`probe`（ping、服务器时间与本地偏移、合约数、各 symbol 标记价与年化资金费；有 key 时打印余额）、`run [--mode paper|live] [--confirm-mainnet]`（`effective_rest_url` 或 `effective_ws_url` 的主机不是测试网主机 `testnet.binancefuture.com`/`stream.binancefuture.com`（`Settings.targets_testnet` 为 False，与 `binance_testnet` 取值无关）且无 `--confirm-mainnet` → 退出码 2 并说明）、`kill [--reset]`（`--reset` → `KillSwitch.reset`，kv `kill_switch=0`；live 模式下任一 symbol 全平失败 → 逐条打印并退出码 1）、`stop`（kv `stop_requested=1`，守护进程 ~15 s 内退出）、`status`（持仓、挂单、当日已实现盈亏、杀开关、最近 10 条信号）、`signals`（有效性表）、`classify TEXT`（配置了 `DEEPSEEK_API_KEY` 且启用 LLM 时用 DeepSeek，否则用关键词分类器）。
 
 ### 5.12 `ai_trader/strategy/autotune.py`（**[用户要求 2026-10-29 深夜]**："如果结果出现偏差，或者实测数据不好，你需要自动调整策略"）
 
@@ -316,4 +316,4 @@ CLI（typer，脚本名 `ai-trader`）：`tuning`（最近 50 条自动调参记
 
 ## 8. 对结果的预期（写给用户）
 
-这套系统能在测试网完整运转，并把每个信号的 10 分钟 / 1 小时 / 4 小时前瞻收益存下来。它不保证有正期望：调研结论是公开信息驱动的方向交易扣费后接近零。正确的用法是先跑一个月 `paper`/`live`（测试网），每周看 `ai-trader signals`，只保留命中率和均值都站得住的探测器，再考虑主网小额。X 和 Claude 的每日预算默认很保守（约 10 美元 + 几美元/天），可按需放开。
+这套系统能在测试网完整运转，并把每个信号的 10 分钟 / 1 小时 / 4 小时前瞻收益存下来。它不保证有正期望：调研结论是公开信息驱动的方向交易扣费后接近零。正确的用法是先跑一个月 `paper`/`live`（测试网），每周看 `ai-trader signals`，只保留命中率和均值都站得住的探测器，再考虑主网小额。X 和 DeepSeek 的每日预算默认很保守（约 10 美元 + 几美元/天），可按需放开。

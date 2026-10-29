@@ -6,7 +6,7 @@
 
 **Architecture:** 单进程、事件总线驱动（`EventBus` 按类型分发，每订阅者独立队列）。数据层（WS 行情、RSS/X 轮询）→ 探测器（资金费率、清算、新闻情绪）→ 信号聚合 → 风控引擎 → 执行服务 → `Broker` 接口（`PaperBroker` / `BinanceFuturesBroker`）。SQLite 记录全链路；CLI 负责探测、运行、杀开关与报表。
 
-**Tech Stack:** Python 3.12, uv, httpx, websockets, pydantic v2 + pydantic-settings, anthropic, aiosqlite, typer, feedparser; 测试 pytest + pytest-asyncio + respx。
+**Tech Stack:** Python 3.12, uv, httpx, websockets, pydantic v2 + pydantic-settings, DeepSeek（经 httpx 调用 OpenAI 兼容接口，无 LLM SDK）, aiosqlite, typer, feedparser; 测试 pytest + pytest-asyncio + respx。
 
 **Spec:** `docs/superpowers/specs/2026-10-29-futures-testnet-design.md`（下文"设计稿"）。每个任务的接口以设计稿第 5 节为准，本计划中的签名与之逐字一致。
 
@@ -1108,7 +1108,7 @@ async def test_public_ping_and_mark():
 
 - [ ] **Step 2: 写 `.env.example` 与 `README.md`**
 
-`.env.example` 列出全部顶层与嵌套变量及默认值（key 留空）。`README.md`（中文）：项目定位与预期（引用设计稿第 8 节的提醒）、本地网络限制与测试网说明（含 Demo Trading 域名不可达）、快速开始（`uv sync --group dev` → 填 `.env` → `uv run ai-trader probe` → `uv run ai-trader run --mode paper` → `uv run ai-trader run --mode live`）、CLI 一览、架构图、配置表、风控与杀开关说明、X 与 Claude 成本控制、如何加探测器/新闻源、测试命令、主网启用步骤与警告。
+`.env.example` 列出全部顶层与嵌套变量及默认值（key 留空）。`README.md`（中文）：项目定位与预期（引用设计稿第 8 节的提醒）、本地网络限制与测试网说明（含 Demo Trading 域名不可达）、快速开始（`uv sync --group dev` → 填 `.env` → `uv run ai-trader probe` → `uv run ai-trader run --mode paper` → `uv run ai-trader run --mode live`）、CLI 一览、架构图、配置表、风控与杀开关说明、X 与 DeepSeek 成本控制、如何加探测器/新闻源、测试命令、主网启用步骤与警告。
 
 - [ ] **Step 3: 全量验证** — `uv run pytest -q`（集成测试 skipped）；`uv run ruff check .`；`uv run ai-trader probe`；`AIT_NETWORK_TESTS=1 uv run pytest -q -m network`。
 

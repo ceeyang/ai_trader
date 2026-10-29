@@ -23,7 +23,7 @@ paper 模式跑满 **一个月**，用 `ai-trader signals` 的实测命中率和
 
 | 端点 | 状态 |
 |---|---|
-| `https://testnet.binancefuture.com`（REST） | 可达，约 0.5 s，743 个合约 |
+| `https://testnet.binancefuture.com`（REST） | 可达，约 0.5 s；`ai-trader probe` 打印 570 个交易中的永续合约（exchangeInfo 原始 743 个条目，过滤掉非 PERPETUAL / 非 TRADING 的） |
 | `wss://stream.binancefuture.com`（WS） | 可达，`markPrice`/`aggTrade`/`forceOrder` 均有推送 |
 | `https://fapi.binance.com`、`wss://fstream.binance.com`（主网） | 不可达（DNS 劫持/超时） |
 | `https://demo-fapi.binance.com`（Demo Trading） | 不可达 |
@@ -66,7 +66,7 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 | `run [--mode paper\|live] [--confirm-mainnet]` | 启动交易守护进程直到被中断；`--mode` 覆盖 `.env` 里的 `MODE`；只要 REST/WS 端点不是测试网域名（`testnet.binancefuture.com` / `stream.binancefuture.com`）就必须加 `--confirm-mainnet`（不论 `BINANCE_TESTNET` 取值，`BINANCE_REST_URL`/`BINANCE_WS_URL` 覆盖同样适用），否则退出码 2；`LEVERAGE` 大于 `RISK__MAX_LEVERAGE` 时拒绝启动 |
 | `kill [--reset]` | 设置持久化杀开关（kv `kill_switch=1`）；live 模式下本命令同时撤销所有挂单并平掉所有持仓（任何 symbol 撤单/平仓失败都会逐条打印并以退出码 1 结束）；正在运行的守护进程（paper 或 live）在 ~15 s 内观察到该标志并对自己的 broker 执行一次全平。`--reset` 清除杀开关（kv `kill_switch=0`）并打印新状态 |
 | `stop` | 请求正在运行的守护进程优雅退出（kv `stop_requested=1`），守护进程在 ~15 s 内停止并把标志复位为 0 |
-| `status` | 打印杀开关状态、当日已实现盈亏、各表计数、当前生效的自动调参参数、最近 10 条信号；paper 模式打印模拟账户，live 模式打印真实持仓/挂单 |
+| `status` | 打印杀开关状态、当日已实现盈亏、各表计数、当前生效的自动调参参数、最近 10 条信号；paper 模式打印模拟账户，live 模式打印真实持仓/挂单。注意两行盈亏口径不同：`realized PnL today (UTC, from fills, gross of fees)` 是当日成交回报的已实现盈亏之和，**未扣手续费**；`paper account (persisted, net of fees)` 的 `wallet`/`realized_pnl` 是模拟账户口径，**已扣手续费** |
 | `signals` | 打印信号有效性表（按探测器 × 前瞻窗口的样本数、均值收益、命中率） |
 | `tuning` | 打印最近 50 条 AutoTuner 自动调参记录 |
 
@@ -217,6 +217,21 @@ uv run python scripts/check_run.py .   # 只读探针：进程是否存活、各
    uv run ai-trader run --mode live --confirm-mainnet
    ```
 
-   不加这个参数、同时 `BINANCE_TESTNET=false` 时，`ai-trader run` 会直接退出（退出码 2）并打印提醒，防止误操作。
+   只要 REST/WS 端点不是测试网域名（不论 `BINANCE_TESTNET` 取值，`BINANCE_REST_URL`/`BINANCE_WS_URL` 覆盖也算），
+   不加这个参数时 `ai-trader run` 会直接退出（退出码 2）并打印提醒，防止误操作。
 4. 建议先把 `RISK__MAX_ORDER_NOTIONAL_USDT` / `RISK__MAX_TOTAL_EXPOSURE_USDT` 调小到你能接受的真实亏损上限，
    并随时用 `uv run ai-trader kill` 紧急停止。
+
+### 上线前检查清单（live-readiness）
+
+最终代码评审列出的「上 live 之前必须满足」项，逐条确认后再考虑主网：
+
+- [x] **listenKey 生命周期**：收到 `listenKeyExpired` 或 keepalive 失败时自动新建 listenKey、停旧 WS、在新 key 上
+  重连；用户数据流 / keepalive / 对账任务由监督器看护，意外退出会记 ERROR 并退避重启；日志不打印 listenKey。
+- [x] **持仓模式必须是单向（one-way）**：`live` 启动时查询 `GET /fapi/v1/positionSide/dual`，双向（hedge）模式直接
+  拒绝启动。请先在币安合约设置里切到单向持仓。
+- [x] **`RISK__MAX_LEVERAGE`**：`LEVERAGE` 大于 `RISK__MAX_LEVERAGE` 时拒绝启动；确认两者都设成你能接受的值。
+- [x] **主网保护**：只要端点不是测试网域名，`run` 就必须带 `--confirm-mainnet`（含 URL 覆盖）。
+- [ ] **先跑 paper ≥ 1 个月**（再跑测试网 `live`），每周看 `ai-trader signals` / `ai-trader tuning`，只保留命中率和
+  均值收益都站得住的探测器；这一项只能靠时间完成。
+- [ ] 主网 API key：仅合约交易、禁止提现、IP 白名单；`RISK__*` 调到能承受的真实亏损上限。

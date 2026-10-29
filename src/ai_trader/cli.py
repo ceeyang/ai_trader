@@ -344,7 +344,8 @@ def _paper_state_lines(raw: str) -> list[str]:
     from decimal import Decimal
 
     snap = json.loads(raw)
-    lines = [f"paper account (persisted): wallet={snap['wallet_balance']} realized_pnl={snap['realized_pnl']} USDT"]
+    head = f"paper account (persisted, net of fees): wallet={snap['wallet_balance']} "
+    lines = [head + f"realized_pnl={snap['realized_pnl']} USDT"]
     positions = snap["positions"]
     lines.append("positions:" + ("" if positions else " (none)"))
     for symbol, p in sorted(positions.items()):
@@ -376,7 +377,7 @@ async def _status() -> None:
         print(f"mode: {s.mode}  endpoint: {s.effective_rest_url}  db: {s.db_path}")
         print(f"kill switch: {'ACTIVE' if kill_active else 'inactive'}")
         pnl = await store.realized_pnl_since(_today_utc_midnight())
-        print(f"realized PnL today (UTC): {pnl} USDT")
+        print(f"realized PnL today (UTC, from fills, gross of fees): {pnl} USDT")
         counts = [f"{t}={await store.count(t)}" for t in ("signals", "decisions", "orders", "fills", "news")]
         print("counts: " + " ".join(counts))
         _print_tuning_params(s, await store.get_kv("tuning_effective"))
