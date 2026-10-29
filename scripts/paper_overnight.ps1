@@ -28,13 +28,17 @@ $env:RISK__MAX_CONSECUTIVE_LOSSES = "8"
 # --- aggressive multi-symbol paper profile (user request 2026-10-29: 激进量化, 多币种) ---
 # All 14 symbols verified as TRADING perpetuals on testnet.binancefuture.com.
 $env:SYMBOLS = '["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","DOTUSDT","TRXUSDT","SUIUSDT","NEARUSDT"]'
-$env:LEVERAGE = "5"
-$env:RISK__MAX_LEVERAGE = "5"
-$env:STRATEGY__BASE_NOTIONAL_USDT = "500"
-$env:RISK__MAX_ORDER_NOTIONAL_USDT = "1000"
-$env:RISK__MAX_TOTAL_EXPOSURE_USDT = "5000"
-$env:RISK__MAX_OPEN_POSITIONS = "6"
-$env:RISK__MAX_DAILY_LOSS_PCT = "10"
+# Step 2 (user: 激進一點兒): larger size, more positions, faster re-entry, laxer auto-tuner brake.
+$env:LEVERAGE = "10"
+$env:RISK__MAX_LEVERAGE = "10"
+$env:STRATEGY__BASE_NOTIONAL_USDT = "1000"
+$env:RISK__MAX_ORDER_NOTIONAL_USDT = "2000"
+$env:RISK__MAX_TOTAL_EXPOSURE_USDT = "10000"
+$env:RISK__MAX_OPEN_POSITIONS = "10"
+$env:RISK__MAX_DAILY_LOSS_PCT = "15"
+$env:STRATEGY__ENTRY_THRESHOLD = "0.45"
+$env:STRATEGY__COOLDOWN_S = "300"
+$env:STRATEGY__OVERTRADING_DECISIONS = "60"
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $log = Join-Path $Repo "data\paper-run-$stamp.log"
