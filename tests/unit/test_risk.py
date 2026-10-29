@@ -263,3 +263,32 @@ async def test_kill_switch_closes_position_despite_cancel_all_failure(st):
     assert set(broker.cancel_all_calls) == {"BTCUSDT", "ETHUSDT"}
     assert set(broker.close_calls) == {"BTCUSDT", "ETHUSDT"}
     assert events[-1].reason == "cancel flaky"
+
+
+async def test_kill_switch_sweeps_even_if_flag_write_fails():
+    class BrokenStore:
+        async def set_kv(self, k, v):
+            raise RuntimeError("db locked")
+
+    class FakeBroker:
+        def __init__(self):
+            self.closed = []
+
+        async def positions(self):
+            return {"BTCUSDT": make_position(PositionSide.LONG, Decimal("0.002"), Decimal(80000))}
+
+        async def open_order_symbols(self):
+            return set()
+
+        async def cancel_all(self, s):
+            raise RuntimeError("cancel failed")
+
+        async def close_position(self, s):
+            self.closed.append(s)
+
+    broker = FakeBroker()
+    ks = KillSwitch(BrokenStore(), broker, EventBus())
+    await ks.trigger("test")
+    assert broker.closed == ["BTCUSDT"] and ks.triggered
+    assert any("persist flag" in e for e in ks.last_errors)
+    assert any("BTCUSDT cancel_all" in e for e in ks.last_errors)
