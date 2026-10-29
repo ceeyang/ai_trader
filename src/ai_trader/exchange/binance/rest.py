@@ -226,6 +226,11 @@ class BinanceFuturesRest:
         data = await self._request("GET", "/fapi/v2/positionRisk", params, signed=True, retry=True)
         return [parse_rest_position(p) for p in data]
 
+    async def position_mode(self) -> bool:
+        """GET /fapi/v1/positionSide/dual: True when the account is in hedge (dual-side) mode."""
+        data = await self._request("GET", "/fapi/v1/positionSide/dual", signed=True, retry=True)
+        return bool(data["dualSidePosition"])
+
     async def set_leverage(self, symbol: str, leverage: int) -> int:
         data = await self._request(
             "POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage}, signed=True, retry=False

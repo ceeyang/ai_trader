@@ -5,7 +5,9 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import websockets
 
@@ -22,6 +24,23 @@ def user_stream_url(base_ws: str, listen_key: str) -> str:
     return f"{base_ws}/ws/{listen_key}"
 
 
+def redact_url(url: str) -> str:
+    """A loggable form of `url`: a user-data stream (`/ws/<listenKey>`) is reduced to
+    scheme + host + `/ws/<listenKey>`, since the listen key grants access to account data."""
+    parts = urlsplit(url)
+    if "/ws/" in parts.path:
+        return f"{parts.scheme}://{parts.netloc}/ws/<listenKey>"
+    return url
+
+
+class _Conn(Protocol):
+    """The part of a websockets client connection this module uses."""
+
+    def __aiter__(self) -> AsyncIterator[str | bytes]: ...
+
+    async def close(self) -> None: ...
+
+
 class BinanceFuturesWS:
     """Reconnecting WS client. Combined-stream envelopes (`{"stream", "data"}`) are
     unwrapped before dispatch; single-stream messages pass through unchanged."""
@@ -32,7 +51,7 @@ class BinanceFuturesWS:
         handler: Callable[[dict], Awaitable[None]],
         *,
         backoff_s: Sequence[float] = _DEFAULT_BACKOFF_S,
-        connect: Callable[..., object] = websockets.connect,
+        connect: Callable[..., Any] = websockets.connect,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._url = url
@@ -42,7 +61,7 @@ class BinanceFuturesWS:
         self._clock = clock
         self._stopped = False
         self._stop_event = asyncio.Event()
-        self._conn: object | None = None
+        self._conn: _Conn | None = None
         self.last_message_at: float | None = None
         self.reconnects = 0
 
@@ -77,7 +96,11 @@ class BinanceFuturesWS:
 
             if self._stopped:
                 break
-            log.warning("Binance WS connection to %s closed, reconnecting: %s", self._url, error)
+            log.warning(
+                "Binance WS connection to %s closed, reconnecting: %s",
+                redact_url(self._url),
+                self._redact(f"{type(error).__name__}: {error}" if error is not None else "closed"),
+            )
             sleep_s = self._backoff_s[min(backoff_i, len(self._backoff_s) - 1)]
             self.reconnects += 1
             backoff_i += 1
@@ -85,6 +108,15 @@ class BinanceFuturesWS:
             # instead of blocking for the full backoff delay (up to 30s by default).
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stop_event.wait(), timeout=sleep_s)
+
+    def _redact(self, text: str) -> str:
+        """Strip a user-stream listen key from free text (e.g. an exception echoing the URL)."""
+        path = urlsplit(self._url).path
+        if "/ws/" in path:
+            key = path.rsplit("/ws/", 1)[1]
+            if key:
+                text = text.replace(key, "<listenKey>")
+        return text
 
     async def stop(self) -> None:
         self._stopped = True

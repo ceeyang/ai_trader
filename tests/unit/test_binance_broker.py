@@ -1,4 +1,6 @@
+import asyncio
 from decimal import Decimal
+from typing import ClassVar
 
 import httpx
 import pytest
@@ -32,6 +34,12 @@ def _req(cid: str = "ait-abc", qty: str = "0.002") -> OrderRequest:
 def _broker(bus, exchange_info, **kw) -> BinanceFuturesBroker:
     return BinanceFuturesBroker(
         BinanceFuturesRest(BASE, "k", "s"), exchange_info, bus, "wss://x", ws_factory=fake_ws_factory, **kw
+    )
+
+
+def _one_way(dual: bool = False):
+    return respx.get(f"{BASE}/fapi/v1/positionSide/dual").mock(
+        return_value=httpx.Response(200, json={"dualSidePosition": dual})
     )
 
 
@@ -85,6 +93,7 @@ async def test_submit_validates_filters_first(bus, exchange_info):
 async def test_user_stream_fill_published_and_positions_updated(bus, exchange_info):
     respx.post(f"{BASE}/fapi/v1/listenKey").mock(return_value=httpx.Response(200, json={"listenKey": "LK"}))
     respx.get(f"{BASE}/fapi/v2/positionRisk").mock(return_value=httpx.Response(200, json=[]))
+    _one_way()
     close_lk = respx.delete(f"{BASE}/fapi/v1/listenKey").mock(return_value=httpx.Response(200, json={}))
     fills = []; bus.subscribe(Fill, lambda e: _append(fills, e)); await bus.start()
     results: list[OrderResult] = []
@@ -172,3 +181,105 @@ async def test_refresh_positions_without_start(bus, exchange_info):
     assert br.positions_snapshot() == {}
     await br.refresh_positions()
     assert br.positions_snapshot()["BTCUSDT"].quantity == Decimal("0.002")
+
+
+async def _until(pred, n=300):
+    for _ in range(n):
+        if pred():
+            return True
+        await asyncio.sleep(0.01)
+    return False
+
+
+def _started_mocks(keys):
+    respx.post(f"{BASE}/fapi/v1/listenKey").mock(
+        side_effect=[httpx.Response(200, json={"listenKey": k}) for k in keys]
+    )
+    respx.get(f"{BASE}/fapi/v2/positionRisk").mock(return_value=httpx.Response(200, json=[]))
+    respx.delete(f"{BASE}/fapi/v1/listenKey").mock(return_value=httpx.Response(200, json={}))
+    _one_way()
+
+
+@respx.mock
+async def test_listen_key_expired_rotates_key_and_stream(bus, exchange_info):
+    _started_mocks(["LK1", "LK2"])
+    br = _broker(bus, exchange_info, reconcile_interval_s=3600)
+    await br.start()
+    old_ws = br._ws
+    assert old_ws.url == "wss://x/ws/LK1"
+    await fake_ws_factory.handlers["wss://x/ws/LK1"]({"e": "listenKeyExpired", "E": 1})
+    assert await _until(lambda: br._ws is not old_ws)
+    assert br._ws.url == "wss://x/ws/LK2" and br._listen_key == "LK2"
+    assert old_ws._stopped.is_set()
+    assert not any(t.done() for t in br._tasks)  # the user-stream task now runs the new WS
+    await br.stop()
+
+
+@respx.mock
+async def test_keepalive_failure_rotates_key_and_stream(bus, exchange_info):
+    _started_mocks(["LK1", "LK2"])
+    put = respx.put(f"{BASE}/fapi/v1/listenKey").mock(
+        return_value=httpx.Response(400, json={"code": -1125, "msg": "This listenKey does not exist."})
+    )
+    br = _broker(bus, exchange_info, reconcile_interval_s=3600, keepalive_interval_s=0.05)
+    await br.start()
+    old_ws = br._ws
+    assert await _until(lambda: br._listen_key == "LK2")
+    assert await _until(lambda: br._ws is not old_ws and br._ws.url == "wss://x/ws/LK2")
+    assert old_ws._stopped.is_set() and put.call_count >= 1
+    await br.stop()
+
+
+class _EndingWS:
+    """A WS whose `run()` returns at once (as if the stream died) the first time."""
+
+    made: ClassVar[list] = []
+
+    def __init__(self, url, handler) -> None:
+        self.url = url
+        self._stopped = asyncio.Event()
+        _EndingWS.made.append(self)
+
+    async def run(self) -> None:
+        if len(_EndingWS.made) == 1:
+            return
+        await self._stopped.wait()
+
+    async def stop(self) -> None:
+        self._stopped.set()
+
+
+@respx.mock
+async def test_user_stream_ending_unexpectedly_is_restarted(bus, exchange_info, caplog):
+    import logging
+
+    _started_mocks(["LK1"])
+    _EndingWS.made = []
+    br = BinanceFuturesBroker(
+        BinanceFuturesRest(BASE, "k", "s"), exchange_info, bus, "wss://x",
+        ws_factory=_EndingWS, reconcile_interval_s=3600, backoff_s=(0.01,),
+    )
+    with caplog.at_level(logging.ERROR):
+        await br.start()
+        assert await _until(lambda: len(_EndingWS.made) >= 2)
+    assert "user-stream ended unexpectedly" in caplog.text
+    assert br._ws is _EndingWS.made[-1]
+    await br.stop()
+
+
+@respx.mock
+async def test_start_refuses_hedge_mode(bus, exchange_info):
+    _one_way(dual=True)
+    lk = respx.post(f"{BASE}/fapi/v1/listenKey").mock(return_value=httpx.Response(200, json={"listenKey": "LK"}))
+    with pytest.raises(SystemExit, match="one-way"):
+        await _broker(bus, exchange_info).start()
+    assert lk.call_count == 0
+
+
+@respx.mock
+async def test_position_mode_reads_dual_side_flag():
+    route = _one_way(dual=True)
+    rest = BinanceFuturesRest(BASE, "k", "s")
+    assert await rest.position_mode() is True
+    assert "signature=" in str(route.calls.last.request.url)
+    await rest.aclose()

@@ -5,9 +5,14 @@
   `client_order_id` instead, so an order that did reach the exchange is never sent twice.
   A lookup answering -2013 (does not exist) raises `BinanceOrderNotFound` (the order was
   never placed); any other lookup failure raises `BinanceConnectionError` (unknown).
-* `start()` opens a listen key, seeds the position cache from `position_risk`, and runs
-  the user-data stream plus keepalive (30 min) and reconcile (`reconcile_interval_s`)
-  loops as background tasks.
+* `start()` refuses a hedge-mode (dual-side) account, opens a listen key, seeds the
+  position cache from `position_risk`, and runs the user-data stream plus keepalive
+  (30 min) and reconcile (`reconcile_interval_s`) loops as background tasks. Each runs
+  under a small supervisor: if it ends or crashes unexpectedly it is logged at ERROR and
+  restarted with backoff.
+* Listen-key lifecycle: a `listenKeyExpired` stream event or a failed keepalive rotates
+  the key - a new listen key is created, the old stream is stopped and a new one is
+  started on the new key. The key itself is never logged.
 * `reconcile()` compares `position_risk` with the cache; any difference publishes
   `ReconcileMismatch`, optionally invokes `kill(reason)`, and then adopts the remote state.
 """
@@ -16,7 +21,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from decimal import Decimal
 from typing import Literal, Protocol
 
@@ -48,6 +53,8 @@ from ai_trader.models import (
 log = logging.getLogger(__name__)
 
 KEEPALIVE_INTERVAL_S = 30 * 60
+DEFAULT_BACKOFF_S: tuple[float, ...] = (1, 2, 5, 10, 30)
+STABLE_RUN_S = 60.0  # a run longer than this resets the backoff schedule
 _ORDER_DOES_NOT_EXIST = -2013
 
 
@@ -83,6 +90,8 @@ class BinanceFuturesBroker:
         on_mismatch: Literal["log", "kill"] = "kill",
         kill: Callable[[str], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.time,
+        keepalive_interval_s: float = KEEPALIVE_INTERVAL_S,
+        backoff_s: Sequence[float] = DEFAULT_BACKOFF_S,
     ) -> None:
         self._rest = rest
         self.exchange_info = exchange_info
@@ -98,34 +107,51 @@ class BinanceFuturesBroker:
         self._ws: _WS | None = None
         self._tasks: list[asyncio.Task] = []
         self._listen_key: str | None = None
+        self._keepalive_interval_s = keepalive_interval_s
+        self._backoff_s = tuple(backoff_s) or DEFAULT_BACKOFF_S
+        self._stopping = asyncio.Event()
+        self._rotate_lock = asyncio.Lock()
+        self._rotations: set[asyncio.Task] = set()
 
     # ---- lifecycle --------------------------------------------------------
 
     async def start(self) -> None:
+        if await self._rest.position_mode():
+            raise SystemExit(
+                "hedge (dual-side) position mode is not supported; switch the account to one-way mode"
+            )
+        self._stopping.clear()
         self._listen_key = await self._rest.create_listen_key()
         await self.refresh_positions()
-        self._ws = self._ws_factory(user_stream_url(self._ws_url, self._listen_key), self._on_user_message)
+        self._ws = self._new_ws()
         self._tasks = [
-            asyncio.create_task(self._ws.run(), name="binance-user-stream"),
-            asyncio.create_task(self._keepalive_loop(), name="binance-listen-key-keepalive"),
-            asyncio.create_task(self._reconcile_loop(), name="binance-reconcile"),
+            asyncio.create_task(self._supervise("user-stream", self._run_user_stream), name="binance-user-stream"),
+            asyncio.create_task(
+                self._supervise("listen-key-keepalive", self._keepalive_loop), name="binance-listen-key-keepalive"
+            ),
+            asyncio.create_task(self._supervise("reconcile", self._reconcile_loop), name="binance-reconcile"),
         ]
 
     async def stop(self) -> None:
+        self._stopping.set()
+        for task in self._rotations:
+            task.cancel()
         if self._ws is not None:
             try:
                 await self._ws.stop()
             except Exception:
                 log.exception("stopping the user-data stream failed")
-        for task in self._tasks:
+        tasks = [*self._tasks, *self._rotations]
+        for task in tasks:
             task.cancel()
-        for task in self._tasks:
+        for task in tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 try:
                     await task
                 except Exception:
                     log.exception("background task %s failed", task.get_name())
         self._tasks = []
+        self._rotations = set()
         self._ws = None
         if self._listen_key is not None:
             try:
@@ -134,17 +160,105 @@ class BinanceFuturesBroker:
                 log.warning("closing the listen key failed: %s", exc)
             self._listen_key = None
 
+    def _new_ws(self) -> _WS:
+        assert self._listen_key is not None
+        return self._ws_factory(user_stream_url(self._ws_url, self._listen_key), self._on_user_message)
+
+    async def _supervise(self, name: str, factory: Callable[[], Awaitable[None]]) -> None:
+        """Run `factory()` until stopped; an unexpected return or crash is logged at ERROR
+        and the loop restarted with backoff (the same pattern as `App._supervise`)."""
+        failures = 0
+        while not self._stopping.is_set():
+            started = time.monotonic()
+            try:
+                await factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._stopping.is_set():
+                    return
+                log.exception("binance %s crashed; restarting", name)
+            else:
+                if self._stopping.is_set():
+                    return
+                log.error("binance %s ended unexpectedly; restarting", name)
+            if time.monotonic() - started > STABLE_RUN_S:
+                failures = 0
+            delay = self._backoff_s[min(failures, len(self._backoff_s) - 1)]
+            failures += 1
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=delay)
+
+    async def _run_user_stream(self) -> None:
+        """Run the current user-data stream; a stream stopped by a key rotation hands over
+        to its replacement immediately. Any other end returns (or raises) to the
+        supervisor, which restarts on a fresh connection object."""
+        while not self._stopping.is_set():
+            ws = self._ws
+            if ws is None:
+                return
+            try:
+                await ws.run()
+            except Exception:
+                if self._ws is ws:
+                    self._ws = self._new_ws()
+                raise
+            if self._stopping.is_set():
+                return
+            if self._ws is not ws:
+                continue  # rotated: run the replacement
+            self._ws = self._new_ws()
+            return
+
     async def _keepalive_loop(self) -> None:
-        while True:
-            await asyncio.sleep(KEEPALIVE_INTERVAL_S)
+        while not self._stopping.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=self._keepalive_interval_s)
+            if self._stopping.is_set():
+                return
             try:
                 await self._rest.keepalive_listen_key()
-            except (BinanceError, httpx.HTTPError) as exc:
-                log.warning("listen key keepalive failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001 - any failure may mean a dead key: rotate
+                log.warning("listen key keepalive failed (%s); rotating the listen key", type(exc).__name__)
+                try:
+                    await self._rotate_listen_key("keepalive failed")
+                except Exception:
+                    log.exception("listen key rotation failed; retrying at the next keepalive")
+
+    async def _rotate_listen_key(self, reason: str) -> None:
+        """New listen key -> stop the old stream -> start one on the new key (the user-stream
+        supervisor picks it up). Serialised by a lock."""
+        async with self._rotate_lock:
+            if self._stopping.is_set():
+                return
+            log.warning("rotating the user-data listen key: %s", reason)
+            self._listen_key = await self._rest.create_listen_key()
+            old, self._ws = self._ws, self._new_ws()
+            if old is not None:
+                try:
+                    await old.stop()
+                except Exception:
+                    log.exception("stopping the old user-data stream failed")
+            log.info("user-data stream restarted on a new listen key")
+
+    def _spawn_rotation(self, reason: str) -> None:
+        # Not awaited inline: the caller is the old stream's own message handler, which
+        # the rotation stops.
+        task = asyncio.create_task(self._rotate_listen_key(reason), name="binance-listen-key-rotate")
+        self._rotations.add(task)
+        task.add_done_callback(self._rotation_done)
+
+    def _rotation_done(self, task: asyncio.Task) -> None:
+        self._rotations.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("listen key rotation failed: %r; the keepalive loop will retry", task.exception())
 
     async def _reconcile_loop(self) -> None:
-        while True:
-            await asyncio.sleep(self._reconcile_interval_s)
+        while not self._stopping.is_set():
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=self._reconcile_interval_s)
+            if self._stopping.is_set():
+                return
             try:
                 await self.reconcile()
             except Exception:
@@ -165,7 +279,8 @@ class BinanceFuturesBroker:
                 self._set_position(p)
             self._bus.publish(update)
         elif event == "listenKeyExpired":
-            log.error("user-data listen key expired; the stream will no longer deliver updates")
+            log.error("user-data listen key expired; rotating to a new listen key")
+            self._spawn_rotation("listenKeyExpired")
 
     # ---- positions / reconcile --------------------------------------------
 
