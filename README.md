@@ -69,6 +69,7 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 | `status` | 打印杀开关状态、当日已实现盈亏、各表计数、当前生效的自动调参参数、最近 10 条信号；paper 模式打印模拟账户，live 模式打印真实持仓/挂单。注意两行盈亏口径不同：`realized PnL today (UTC, from fills, gross of fees)` 是当日成交回报的已实现盈亏之和，**未扣手续费**；`paper account (persisted, net of fees)` 的 `wallet`/`realized_pnl` 是模拟账户口径，**已扣手续费** |
 | `signals` | 打印信号有效性表（按探测器 × 前瞻窗口的样本数、均值收益、命中率） |
 | `tuning` | 打印最近 50 条 AutoTuner 自动调参记录 |
+| `dashboard [--host 127.0.0.1] [--port 8787]` | 启动只读的本地实时网页面板（见下方「实时面板」），打印地址后一直运行到 Ctrl+C |
 
 ## 架构
 
@@ -206,6 +207,23 @@ uv run python scripts/check_run.py .   # 只读探针：进程是否存活、各
 ```
 
 `scripts/check_run.py` 是只读的，不会修改 `data/` 下任何内容，可以在运行过程中随时执行。
+
+## 实时面板
+
+`ai-trader dashboard` 起一个只依赖标准库的本地网页（默认 <http://127.0.0.1:8787/>），每 5 秒刷新一次：进程状态
+（运行中 / 已停止 / 数据陈旧 > 60 s）、杀开关、钱包与今日/累计盈亏（毛，来自 fills）、各 symbol 近 2 小时标记价
+走势、持仓与挂单、最近信号 / 决策（含风控拒绝原因）/ 订单 / 成交、信号有效性、自动调参记录、当前生效参数、
+每小时新闻量和守护进程日志末尾。
+
+```powershell
+uv run --no-sync ai-trader dashboard --port 8787          # 前台运行，Ctrl+C 停止
+powershell -ExecutionPolicy Bypass -File scripts\dashboard.ps1   # 后台运行，PID 写入 data\dashboard.pid
+taskkill /PID (Get-Content data\dashboard.pid) /T /F      # 停止后台面板
+```
+
+面板**只读**：每个请求单独用 `mode=ro` 打开 `data/ai_trader.db`，另外只读 `data/paper-run.pid` /
+`data/paper-run.latest` 和对应日志，不会写数据库，可以在守护进程运行时随时开关。JSON 接口是 `GET /api/state`。
+守护进程运行期间请始终带 `--no-sync`（它占用着 venv 里的可执行文件）。默认只绑定 127.0.0.1，不要绑到公网地址。
 
 ## 主网启用步骤与警告
 

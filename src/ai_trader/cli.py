@@ -482,3 +482,25 @@ async def _tuning() -> None:
 def tuning() -> None:
     """Print the last 50 AutoTuner parameter changes (newest first)."""
     asyncio.run(_tuning())
+
+
+@app.command()
+def dashboard(
+    host: str = typer.Option("127.0.0.1", "--host", help="interface to bind (keep it local)"),
+    port: int = typer.Option(8787, "--port", help="TCP port"),
+) -> None:
+    """Serve the read-only real-time web dashboard until Ctrl+C."""
+    import logging
+    from pathlib import Path
+
+    from ai_trader.dashboard import serve
+    from ai_trader.settings import Settings
+
+    s = Settings()
+    logging.basicConfig(level=getattr(logging, str(s.log_level).upper(), logging.INFO))
+    shown = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    print(f"dashboard: http://{shown}:{port}/  (db: {s.db_path}, read-only; Ctrl+C to stop)", flush=True)
+    try:
+        serve(Path(s.db_path), Path.cwd(), list(s.symbols), host=host, port=port)
+    except KeyboardInterrupt:
+        print("dashboard stopped")
