@@ -108,11 +108,11 @@
 
 `RiskLimits`：`max_leverage=3`，`max_order_notional_usdt=Decimal("200")`，`max_total_exposure_usdt=Decimal("500")`，`max_open_positions=2`，`max_daily_loss_pct=Decimal("5")`，`max_consecutive_losses=3`，`max_data_staleness_s=10.0`，`trading_enabled=True`。
 
-`StrategyConfig`：`entry_threshold=0.6`，`exit_threshold=0.4`，`base_notional_usdt=Decimal("100")`，`cooldown_s=900`，`stop_loss_pct=Decimal("0.01")`，`take_profit_pct=Decimal("0.02")`，`max_hold_s=14400`，`signal_half_life_s=1800`，`detector_weights={"funding_extreme":0.5,"liquidation_burst":0.7,"news_sentiment":1.0}`。
+`StrategyConfig`：`entry_threshold=0.6`，`exit_threshold=0.4`，`base_notional_usdt=Decimal("100")`，`cooldown_s=900`，`stop_loss_pct=Decimal("0.01")`，`take_profit_pct=Decimal("0.02")`，`max_hold_s=14400`，`signal_half_life_s=1800`，`detector_weights={"funding_extreme":0.5,"liquidation_burst":0.7,"news_sentiment":1.0,"news_keyword":0.5}`（`news_keyword` = 情绪来自关键词分类器的新闻信号）。
 
 `DetectorConfig`：`funding_annualized_threshold=Decimal("0.30")`，`liquidation_window_s=300`，`liquidation_notional_threshold_usdt=Decimal("50000")`，`liquidation_cooldown_s=900`，`news_min_confidence=0.6`。
 
-`NewsConfig`：`rss_feeds=["https://www.coindesk.com/arc/outboundfeeds/rss/","https://cointelegraph.com/rss"]`，`rss_poll_interval_s=300`，`x_bearer_token: SecretStr | None=None`，`x_query="(from:binance OR from:cz_binance OR from:coinbase OR from:SECGov OR from:federalreserve) -is:retweet"`，`x_poll_interval_s=120`，`x_max_results=10`，`x_daily_read_budget=2000`。
+`NewsConfig`：`rss_feeds=["https://www.coindesk.com/arc/outboundfeeds/rss/","https://cointelegraph.com/rss"]`，`rss_poll_interval_s=300`，`x_bearer_token: SecretStr | None=None`，`x_query="(from:binance OR from:cz_binance OR from:coinbase OR from:SECGov OR from:federalreserve) -is:retweet"`，`x_poll_interval_s=120`，`x_max_results=10`，`x_daily_read_budget=2000`，`max_news_age_s=7200`（发布时间早于 `now − max_news_age_s` 的新闻只入库，不分类、不发信号）。
 
 `LLMConfig`：`enabled=True`，`provider: Literal["deepseek","none"]="deepseek"`，`model="deepseek-chat"`，`base_url="https://api.deepseek.com"`，`daily_call_budget=500`，`max_text_chars=4000`，`timeout_s=30.0`。
 
@@ -241,7 +241,7 @@ class BinanceFuturesWS:
 `detectors/base.py`：`class Detector(Protocol): name: str; subscribes_to: tuple[type, ...]; async def on_event(self, event) -> list[Signal]`；`DetectorRunner(bus, store, detectors)`：为每个探测器订阅其事件类型，产出的 Signal 先 `store.insert_signal` 再 `bus.publish`。
 `detectors/funding_extreme.py`：年化 = `funding_rate × 3 × 365`；|年化| ≥ 阈值 → 正为 BEARISH、负为 BULLISH，`strength = min(1, |年化| / (2×阈值))`，每 `(symbol, next_funding_time)` 只发一次，`expires_at = next_funding_time`。
 `detectors/liquidation_burst.py`：滑动窗口内 `SELL` 侧清算名义和 ≥ 阈值 → BULLISH；`BUY` 侧 → BEARISH；`strength = min(1, 和/(2×阈值))`；`expires_at = now + 15 min`；每 symbol 冷却 `liquidation_cooldown_s`。
-`detectors/news_sentiment.py`：`NewsSentimentDetector(classifier, universe, store, state, cfg: DetectorConfig | None = None, *, min_confidence: float | None = None)`（阈值每次调用时读取：显式 `min_confidence` 优先，否则 `cfg.news_min_confidence`）：分类 → `store.insert_sentiment` → 每个命中符号一条 Signal（`strength = confidence`；horizon → 过期：minutes 30 min、hours 4 h、days 24 h）；NEUTRAL 或 confidence < min → 不发。
+`detectors/news_sentiment.py`：`NewsSentimentDetector(classifier, universe, store, state, cfg: DetectorConfig | None = None, *, min_confidence: float | None = None, news_cfg: NewsConfig | None = None, clock=time.time)`（阈值每次调用时读取：显式 `min_confidence` 优先，否则 `cfg.news_min_confidence`）：`published_at < now − news_cfg.max_news_age_s` → 不分类、不发信号（DEBUG 日志，`stale_skipped` 计数进健康日志）；否则分类 → `store.insert_sentiment` → 每个命中符号一条 Signal（`strength = confidence`；horizon → 过期：minutes 30 min、hours 4 h、days 24 h）；NEUTRAL 或 confidence < min → 不发；`sentiment.model in ("keyword", "keyword-fallback")` 时 Signal 的 `detector="news_keyword"`，否则 `"news_sentiment"`（两者分别计权、分别被 AutoTuner 调整）。
 
 ### 5.7 `ai_trader/strategy/aggregator.py`
 

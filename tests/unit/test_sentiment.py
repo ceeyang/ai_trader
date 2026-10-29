@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import httpx
 import respx
-from conftest import make_mark_price, make_news
+from conftest import T0, make_mark_price, make_news
 
 from ai_trader.analysis.detectors.news_sentiment import NewsSentimentDetector
 from ai_trader.analysis.sentiment.base import canonical_symbols
@@ -12,10 +12,11 @@ from ai_trader.analysis.sentiment.keyword import KeywordClassifier
 from ai_trader.data.market_state import MarketState
 from ai_trader.data.news.base import DailyBudget
 from ai_trader.models import Direction, Horizon, Sentiment
-from ai_trader.settings import DetectorConfig, Settings
+from ai_trader.settings import DetectorConfig, NewsConfig, Settings
 from ai_trader.storage.db import Store
 
 UNI = ["BTCUSDT", "ETHUSDT"]
+NOW = lambda: T0.timestamp()
 DS = "https://api.deepseek.com/chat/completions"
 
 
@@ -140,13 +141,16 @@ def test_settings_llm_defaults(monkeypatch):
 class C:
     name = "fake"
 
-    def __init__(self, conf, horizon=Horizon.HOURS, direction=Direction.BULLISH):
+    def __init__(self, conf, horizon=Horizon.HOURS, direction=Direction.BULLISH, model="fake"):
         self.conf = conf
         self.horizon = horizon
         self.direction = direction
+        self.model = model
+        self.calls = 0
 
     async def classify(self, item):
-        return Sentiment(direction=self.direction, confidence=self.conf, symbols=UNI, horizon=self.horizon, rationale="r", model="fake")
+        self.calls += 1
+        return Sentiment(direction=self.direction, confidence=self.conf, symbols=UNI, horizon=self.horizon, rationale="r", model=self.model)
 
 
 async def _store_and_state(tmp_path, symbols=UNI):
@@ -161,11 +165,11 @@ async def _store_and_state(tmp_path, symbols=UNI):
 async def test_news_detector_emits_per_symbol_and_filters_low_confidence(tmp_path):
     st, state = await _store_and_state(tmp_path)
     try:
-        det = NewsSentimentDetector(C(0.7), UNI, st, state, min_confidence=0.6)
+        det = NewsSentimentDetector(C(0.7), UNI, st, state, min_confidence=0.6, clock=NOW)
         sigs = await det.on_event(make_news("n1"))
         assert [s.symbol for s in sigs] == UNI and sigs[0].strength == 0.7 and sigs[0].expires_at - sigs[0].created_at == timedelta(hours=4) and sigs[0].detector == "news_sentiment"
         assert sigs[0].meta == {"news_id": "n1", "model": "fake"} and sigs[0].direction == Direction.BULLISH
-        assert await NewsSentimentDetector(C(0.5), UNI, st, state, min_confidence=0.6).on_event(make_news("n2")) == []
+        assert await NewsSentimentDetector(C(0.5), UNI, st, state, min_confidence=0.6, clock=NOW).on_event(make_news("n2")) == []
         assert await st.count("sentiments") == 2
     finally:
         await st.close()
@@ -174,13 +178,13 @@ async def test_news_detector_emits_per_symbol_and_filters_low_confidence(tmp_pat
 async def test_news_detector_neutral_silent_and_skips_symbols_without_mark(tmp_path):
     st, state = await _store_and_state(tmp_path, symbols=["ETHUSDT"])
     try:
-        neutral = NewsSentimentDetector(C(0.9, direction=Direction.NEUTRAL), UNI, st, state, min_confidence=0.6)
+        neutral = NewsSentimentDetector(C(0.9, direction=Direction.NEUTRAL), UNI, st, state, min_confidence=0.6, clock=NOW)
         assert await neutral.on_event(make_news("n1")) == []
-        det = NewsSentimentDetector(C(0.9, horizon=Horizon.MINUTES), UNI, st, state, min_confidence=0.6)
+        det = NewsSentimentDetector(C(0.9, horizon=Horizon.MINUTES), UNI, st, state, min_confidence=0.6, clock=NOW)
         sigs = await det.on_event(make_news("n2"))
         assert [s.symbol for s in sigs] == ["ETHUSDT"]
         assert sigs[0].expires_at - sigs[0].created_at == timedelta(minutes=30)
-        days = NewsSentimentDetector(C(0.9, horizon=Horizon.DAYS), UNI, st, state, min_confidence=0.6)
+        days = NewsSentimentDetector(C(0.9, horizon=Horizon.DAYS), UNI, st, state, min_confidence=0.6, clock=NOW)
         sigs = await days.on_event(make_news("n3"))
         assert sigs[0].expires_at - sigs[0].created_at == timedelta(hours=24)
         assert await st.count("sentiments") == 3
@@ -192,10 +196,45 @@ async def test_news_detector_reads_cfg_threshold_at_call_time(tmp_path):
     st, state = await _store_and_state(tmp_path)
     try:
         cfg = DetectorConfig()
-        det = NewsSentimentDetector(C(0.5), UNI, st, state, cfg)
+        det = NewsSentimentDetector(C(0.5), UNI, st, state, cfg, clock=NOW)
         assert await det.on_event(make_news("n1")) == []
         cfg.news_min_confidence = 0.4
         sigs = await det.on_event(make_news("n2"))
         assert len(sigs) == 2 and {s.symbol for s in sigs} == set(UNI)
+    finally:
+        await st.close()
+
+
+async def test_news_detector_tags_keyword_sentiment_as_news_keyword(tmp_path):
+    st, state = await _store_and_state(tmp_path)
+    try:
+        for model in ("keyword", "keyword-fallback"):
+            det = NewsSentimentDetector(C(0.7, model=model), UNI, st, state, min_confidence=0.6, clock=NOW)
+            sigs = await det.on_event(make_news(f"n-{model}"))
+            assert {s.detector for s in sigs} == {"news_keyword"}
+        llm = NewsSentimentDetector(C(0.7, model="deepseek-chat"), UNI, st, state, min_confidence=0.6, clock=NOW)
+        assert {s.detector for s in await llm.on_event(make_news("n-llm"))} == {"news_sentiment"}
+    finally:
+        await st.close()
+
+
+def test_news_keyword_has_default_weight():
+    assert Settings(_env_file=None).strategy.detector_weights["news_keyword"] == 0.5
+
+
+async def test_news_detector_skips_stale_items_without_classifying(tmp_path):
+    from datetime import timedelta as td
+
+    st, state = await _store_and_state(tmp_path)
+    try:
+        clf = C(0.9)
+        late = lambda: (T0 + td(seconds=7201)).timestamp()
+        det = NewsSentimentDetector(clf, UNI, st, state, min_confidence=0.6, news_cfg=NewsConfig(), clock=late)
+        assert await det.on_event(make_news("old")) == []
+        assert clf.calls == 0 and det.stale_skipped == 1
+        assert await st.count("news") == 1 and await st.count("sentiments") == 0
+        fresh = lambda: (T0 + td(seconds=7199)).timestamp()
+        det2 = NewsSentimentDetector(clf, UNI, st, state, min_confidence=0.6, news_cfg=NewsConfig(), clock=fresh)
+        assert len(await det2.on_event(make_news("recent"))) == 2 and clf.calls == 1
     finally:
         await st.close()

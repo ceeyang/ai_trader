@@ -172,7 +172,9 @@ async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, s
     detectors = [
         FundingExtremeDetector(settings.detectors, state),
         LiquidationBurstDetector(settings.detectors, state),
-        NewsSentimentDetector(classifier, settings.symbols, store, state, settings.detectors),
+        NewsSentimentDetector(
+            classifier, settings.symbols, store, state, settings.detectors, news_cfg=settings.news
+        ),
     ]
     runner = DetectorRunner(bus, store, detectors)
     poller = NewsPoller(bus, store, _build_sources(settings, http))

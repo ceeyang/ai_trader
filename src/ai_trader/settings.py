@@ -37,6 +37,9 @@ class StrategyConfig(BaseModel):
         "funding_extreme": 0.5,
         "liquidation_burst": 0.7,
         "news_sentiment": 1.0,
+        # news signals whose sentiment came from the keyword classifier (no LLM, or the
+        # LLM failed): weaker evidence, separately weighted and auto-tuned.
+        "news_keyword": 0.5,
     }
 
 
@@ -62,6 +65,9 @@ class NewsConfig(BaseModel):
     x_poll_interval_s: int = 120
     x_max_results: int = 10
     x_daily_read_budget: int = 2000
+    # Items published longer ago than this are stored but never classified (saves the
+    # LLM budget) and never produce a signal.
+    max_news_age_s: int = 7200
 
 
 class LLMConfig(BaseModel):
