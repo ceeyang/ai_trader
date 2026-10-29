@@ -35,6 +35,11 @@ class StrategyConfig(BaseModel):
     take_profit_pct: Decimal = Decimal("0.02")
     max_hold_s: int = 14400
     signal_half_life_s: int = 1800
+    # AutoTuner thresholds (read at every tick): overtrading_brake fires at >= this many
+    # decisions in the activity window; activity_floor fires when signals < activity_min_signals
+    # and there were no decisions.
+    overtrading_decisions: int = 10
+    activity_min_signals: int = 3
     detector_weights: dict[str, float] = {
         "funding_extreme": 0.5,
         "liquidation_burst": 0.7,

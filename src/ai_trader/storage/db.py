@@ -607,6 +607,12 @@ class Store:
         )
         await self._conn.commit()
 
+    async def delete_kv(self, key: str) -> bool:
+        """Delete `key`; returns True when a row was removed."""
+        cur = await self._conn.execute("DELETE FROM kv WHERE key = ?", (key,))
+        await self._conn.commit()
+        return cur.rowcount > 0
+
     # ---- auto-tuning (design 5.12) ----------------------------------------
 
     async def insert_tuning_change(self, change: TuningChange) -> None:

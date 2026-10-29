@@ -456,14 +456,23 @@ def signals() -> None:
     asyncio.run(_signals())
 
 
-async def _tuning() -> None:
+async def _tuning(reset: bool = False) -> None:
     from ai_trader.settings import Settings
     from ai_trader.storage.db import Store
+    from ai_trader.strategy.autotune import EFFECTIVE_KV_KEY
 
     s = Settings()
     store = Store(s.db_path)
     await store.open()
     try:
+        if reset:
+            old = await store.get_kv(EFFECTIVE_KV_KEY)
+            if old is not None and await store.delete_kv(EFFECTIVE_KV_KEY):
+                print(f"cleared kv `{EFFECTIVE_KV_KEY}` (was: {old})")
+                print("restart the daemon: its next start uses the configured values")
+            else:
+                print("nothing to reset")
+            return
         rows = await store.tuning_log(50)
     finally:
         await store.close()
@@ -479,9 +488,20 @@ async def _tuning() -> None:
 
 
 @app.command()
-def tuning() -> None:
-    """Print the last 50 AutoTuner parameter changes (newest first)."""
-    asyncio.run(_tuning())
+def tuning(
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help=(
+            "Delete the persisted tuned values (kv `tuning_effective`) so the next daemon "
+            "start uses the configured STRATEGY__/DETECTORS__ values. Run it while the daemon "
+            "is NOT running (a running daemon republishes its values every tick), then restart "
+            "the daemon. The tuning log is kept."
+        ),
+    ),
+) -> None:
+    """Print the last 50 AutoTuner parameter changes (newest first), or --reset them."""
+    asyncio.run(_tuning(reset))
 
 
 @app.command()

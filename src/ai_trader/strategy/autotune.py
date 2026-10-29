@@ -7,7 +7,7 @@ has passed since `run()` started, so a fresh (or restarted) process does not jud
 market it has barely observed — which evaluates four rules in this order, each
 moving its fields at most one step per tick:
 
-1. `activity_floor` — fewer than 3 signals and no decision in the last `activity_window_s`:
+1. `activity_floor` — fewer than `strategy.activity_min_signals` (default 3) signals and no decision in the last `activity_window_s`:
    liquidation threshold ×0.7 (≥ 5000), news confidence −0.05 (≥ 0.3), funding threshold
    ×0.8 (≥ 0.05), `entry_threshold` −0.05 (≥ 0.3).
 2. `detector_quality` — for each detector with n ≥ 20 one-hour forward returns: hit rate
@@ -17,7 +17,7 @@ moving its fields at most one step per tick:
    `day_start_equity:<UTC date>` is missing) → `base_notional_usdt` ×0.5 (≥ 50) and
    `entry_threshold` +0.1 (≤ 0.9); ≥ +2 % with the notional below the default 100 → ×1.25
    (≤ 100).
-4. `overtrading_brake` — at least 10 decisions in the last `activity_window_s` →
+4. `overtrading_brake` — at least `strategy.overtrading_decisions` (default 10) decisions in the last `activity_window_s` →
    `cooldown_s` ×1.5 (≤ 3600) and `entry_threshold` +0.05 (≤ 0.9).
 
 The `StrategyConfig`/`DetectorConfig` objects are mutated in place — they are the very
@@ -50,8 +50,7 @@ log = logging.getLogger(__name__)
 
 EFFECTIVE_KV_KEY = "tuning_effective"
 
-# activity_floor
-MIN_SIGNALS = 3
+# activity_floor (signal minimum: strategy_cfg.activity_min_signals, read per tick)
 LIQ_FACTOR, LIQ_FLOOR = Decimal("0.7"), Decimal(5000)
 NEWS_STEP, NEWS_FLOOR = 0.05, 0.3
 FUNDING_FACTOR, FUNDING_FLOOR = Decimal("0.8"), Decimal("0.05")
@@ -65,8 +64,7 @@ DAILY_PNL_PCT = Decimal("0.02")
 NOTIONAL_CUT, NOTIONAL_FLOOR = Decimal("0.5"), Decimal(50)
 NOTIONAL_RECOVER, NOTIONAL_DEFAULT = Decimal("1.25"), Decimal(100)
 ENTRY_BRAKE_STEP, ENTRY_CAP = 0.1, 0.9
-# overtrading_brake
-MAX_DECISIONS = 10
+# overtrading_brake (decision maximum: strategy_cfg.overtrading_decisions, read per tick)
 COOLDOWN_FACTOR, COOLDOWN_CAP = 1.5, 3600
 ENTRY_OVERTRADE_STEP = 0.05
 
@@ -127,11 +125,12 @@ class AutoTuner:
         return changes
 
     def _activity_floor(self, now: datetime, n_signals: int, n_decisions: int) -> list[TuningChange]:
-        if not (n_signals < MIN_SIGNALS and n_decisions == 0):
+        min_signals = self.strategy_cfg.activity_min_signals
+        if not (n_signals < min_signals and n_decisions == 0):
             return []
         rule = "activity_floor"
         reason = (
-            f"signals={n_signals}<{MIN_SIGNALS} and decisions={n_decisions}==0 "
+            f"signals={n_signals}<{min_signals} and decisions={n_decisions}==0 "
             f"in last {self._activity_window_s}s"
         )
         d, s = self.detector_cfg, self.strategy_cfg
@@ -194,10 +193,11 @@ class AutoTuner:
         return out
 
     def _overtrading_brake(self, now: datetime, n_decisions: int) -> list[TuningChange]:
-        if n_decisions < MAX_DECISIONS:
+        max_decisions = self.strategy_cfg.overtrading_decisions
+        if n_decisions < max_decisions:
             return []
         rule = "overtrading_brake"
-        reason = f"decisions={n_decisions}>={MAX_DECISIONS} in last {self._activity_window_s}s"
+        reason = f"decisions={n_decisions}>={max_decisions} in last {self._activity_window_s}s"
         s = self.strategy_cfg
         out: list[TuningChange] = []
         self._set(out, now, rule, reason, s, "strategy", "cooldown_s",

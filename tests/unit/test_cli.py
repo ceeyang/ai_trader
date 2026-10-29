@@ -135,6 +135,28 @@ def test_cli_tuning_empty(tmp_path, monkeypatch):
     assert r.exit_code == 0 and "no tuning changes yet" in r.output
 
 
+def test_cli_tuning_reset_clears_effective_and_is_idempotent(tmp_path, monkeypatch):
+    path = tmp_path / "reset.db"
+    monkeypatch.setenv("DB_PATH", str(path))
+    asyncio.run(_seed_tuning(path))  # tick() publishes kv tuning_effective
+
+    async def _get():
+        st = Store(path)
+        await st.open()
+        try:
+            return await st.get_kv("tuning_effective"), len(await st.tuning_log(50))
+        finally:
+            await st.close()
+
+    assert asyncio.run(_get())[0] is not None
+    r = CliRunner().invoke(app, ["tuning", "--reset"])
+    assert r.exit_code == 0 and "cleared kv `tuning_effective`" in r.output
+    value, n_log = asyncio.run(_get())
+    assert value is None and n_log > 0  # the tuning log is kept
+    r = CliRunner().invoke(app, ["tuning", "--reset"])
+    assert r.exit_code == 0 and "nothing to reset" in r.output
+
+
 def test_cli_status_prints_effective_parameters(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "s.db"))
     monkeypatch.setenv("MODE", "paper")

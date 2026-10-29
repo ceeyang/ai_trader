@@ -162,6 +162,29 @@ async def test_overtrading_brake_caps(st):
     assert abs(t.strategy_cfg.entry_threshold - 0.9) < 1e-9
 
 
+async def test_overtrading_threshold_read_from_config(st):
+    for i in range(59):
+        await st.insert_decision(make_decision_model(created_at=T0 - timedelta(minutes=i + 1)))
+    t = mk(st)
+    t.strategy_cfg.overtrading_decisions = 60
+    assert [c for c in await t.tick() if c.rule == "overtrading_brake"] == []  # 59 < 60
+    assert t.strategy_cfg.cooldown_s == 900
+    await st.insert_decision(make_decision_model(created_at=T0 - timedelta(seconds=30)))
+    changes = [c for c in await t.tick() if c.rule == "overtrading_brake"]
+    assert changes and "decisions=60>=60" in changes[0].reason
+    assert t.strategy_cfg.cooldown_s == 1350
+
+
+async def test_activity_floor_threshold_read_from_config(st):
+    for i in range(3):
+        await st.insert_signal(make_signal(f"s{i}", created_at=T0 - timedelta(minutes=10)))
+    t = mk(st)
+    assert [c for c in await t.tick() if c.rule == "activity_floor"] == []  # 3 signals, default min 3
+    t.strategy_cfg.activity_min_signals = 5
+    changes = [c for c in await t.tick() if c.rule == "activity_floor"]
+    assert changes and "signals=3<5" in changes[0].reason
+
+
 async def test_mutates_shared_config_objects_in_place(st):
     strategy, detectors = StrategyConfig(), DetectorConfig()
     weights = strategy.detector_weights
