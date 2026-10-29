@@ -1,13 +1,14 @@
 """RiskEngine: hard pre-trade limits, evaluated fresh on every call (design 5.8).
 
 Checks run in this exact order and stop at the first failure: kill switch -> trading
-enabled -> symbol allow-list -> market data freshness. Those first three always apply,
-regardless of intent. Data freshness only gates OPEN: closing a position is a
-risk-*reducing* action, so it must not be blocked by a stale or missing market feed — a
-CLOSE decision that clears kill switch/trading-enabled/symbol-allowed is approved
-outright. An OPEN decision that also clears the freshness check continues through
-notional-cap, total-exposure, open-position-count, daily-loss and consecutive-loss
-checks, in that order.
+enabled -> symbol allow-list -> market data freshness. Only the kill switch applies to
+every intent: a CLOSE decision is a risk-*reducing* action, so it is approved as soon as
+the kill switch is off — `trading_disabled`, `symbol_not_allowed` and `data_stale` gate
+OPEN decisions only (a disabled flag, a symbol dropped from the allow-list or a stale
+feed must never trap an existing position). An OPEN decision that clears all four
+continues through notional-cap, total-exposure, open-position-count, daily-loss and
+consecutive-loss checks, in that order. The daily-loss check is skipped (logged once per
+day) when the day's starting equity is not positive, rather than rejecting everything.
 
 `limits` fields are read fresh on every call (never cached), since other config is
 mutated at runtime by the AutoTuner (`RiskLimits` itself never is, but this engine does
@@ -53,6 +54,7 @@ class RiskEngine:
         self._state = state
         self._allowed_symbols = allowed_symbols
         self._clock = clock
+        self._nonpositive_start_logged: datetime | None = None
 
     async def evaluate(self, d: Decision, account: AccountState) -> RiskVerdict:
         verdict = await self._evaluate(d, account)
@@ -71,13 +73,13 @@ class RiskEngine:
 
         if await self._store.get_kv("kill_switch") == "1":
             return self._rejected(d, "kill_switch")
+        if d.intent != Intent.OPEN:
+            # Risk-reducing: only the kill switch may block a CLOSE.
+            return RiskVerdict(approved=True)
         if not limits.trading_enabled:
             return self._rejected(d, "trading_disabled")
         if d.symbol not in self._allowed_symbols:
             return self._rejected(d, "symbol_not_allowed")
-
-        if d.intent != Intent.OPEN:
-            return RiskVerdict(approved=True)
 
         age = self._state.age_s(d.symbol)
         if age is None or age > limits.max_data_staleness_s:
@@ -96,10 +98,18 @@ class RiskEngine:
         if len(account.open_positions()) >= limits.max_open_positions:
             return self._rejected(d, "max_open_positions", adjusted_notional)
 
-        pnl = await self._store.realized_pnl_since(day_start)
-        threshold = -(limits.max_daily_loss_pct / Decimal(100)) * start
-        if pnl <= threshold:
-            return self._rejected(d, "daily_loss_limit", adjusted_notional)
+        if start > 0:
+            pnl = await self._store.realized_pnl_since(day_start)
+            threshold = -(limits.max_daily_loss_pct / Decimal(100)) * start
+            if pnl <= threshold:
+                return self._rejected(d, "daily_loss_limit", adjusted_notional)
+        elif self._nonpositive_start_logged != day_start:
+            self._nonpositive_start_logged = day_start
+            log.warning(
+                "day start equity %s is not positive; skipping the daily-loss check for %s",
+                start,
+                day_start.date().isoformat(),
+            )
 
         if await self._store.consecutive_losses() >= limits.max_consecutive_losses:
             return self._rejected(d, "consecutive_losses", adjusted_notional)

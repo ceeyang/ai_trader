@@ -56,6 +56,26 @@ async def test_stale_blocks_open_but_allows_close(st, state_stale):
     assert v_close.approved
 
 
+async def test_close_bypasses_trading_disabled_and_symbol_allow_list(st, state_stale):
+    e = make_engine(st, state_stale, trading_enabled=False)
+    assert (await evaluate(e, st, make_decision())).reason == "trading_disabled"
+    assert (await evaluate(e, st, make_decision(intent=Intent.CLOSE))).approved
+    v = await evaluate(e, st, make_decision(symbol="DOGEUSDT", intent=Intent.CLOSE))
+    assert v.approved  # a symbol dropped from the allow-list can still be closed
+
+
+async def test_nonpositive_day_start_equity_skips_daily_loss_check(st, state_fresh, caplog):
+    import logging
+
+    await st.set_kv(f"day_start_equity:{T0.date().isoformat()}", "0")
+    await st.insert_fill(make_fill("c1", realized_pnl=Decimal(-600), event_time=T0))
+    e = make_engine(st, state_fresh)
+    with caplog.at_level(logging.WARNING):
+        assert (await evaluate(e, st, make_decision())).approved
+        assert (await evaluate(e, st, make_decision())).approved
+    assert caplog.text.count("not positive") == 1
+
+
 async def test_total_exposure(st, state_fresh):
     acc = make_account(
         wallet=Decimal("10000"),  # noqa: FURB157
