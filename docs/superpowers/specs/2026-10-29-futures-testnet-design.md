@@ -289,11 +289,11 @@ CLI（typer，脚本名 `ai-trader`）：`tuning`（最近 50 条自动调参记
 
 ### 5.12 `ai_trader/strategy/autotune.py`（**[用户要求 2026-10-29 深夜]**："如果结果出现偏差，或者实测数据不好，你需要自动调整策略"）
 
-`AutoTuner(store, strategy_cfg: StrategyConfig, detector_cfg: DetectorConfig, *, interval_s=1800, activity_window_s=7200, clock)`：每 `interval_s` 执行 `tick()`，按顺序评估四条规则，每条每次最多一步，所有改动写入 `tuning_log(ts, rule, field, old, new, reason)` 并打日志；**绝不修改 `RiskLimits`**：
+`AutoTuner(store, strategy_cfg: StrategyConfig, detector_cfg: DetectorConfig, *, interval_s=1800, activity_window_s=7200, clock)`：每 `interval_s` 执行 `tick()`（`run()` 启动时立即恢复并发布生效参数，但首个 `tick()` 要等满一个 `interval_s`），按顺序评估四条规则，每条每次最多一步，所有改动写入 `tuning_log(ts, rule, field, old, new, reason)` 并打日志；**绝不修改 `RiskLimits`**：
 
 1. `activity_floor`：窗口内信号 < 3 且决策 == 0 → 清算阈值 ×0.7（≥5000）、新闻置信度阈值 −0.05（≥0.3）、资金费率阈值 ×0.8（≥0.05）、`entry_threshold` −0.05（≥0.3）。
 2. `detector_quality`：1 h 前瞻收益样本 n ≥ 20 的探测器，命中率 < 0.40 且均值 < 0 → 权重 −0.25（≥0，0 即停用）；命中率 ≥ 0.55 且均值 > 0 → 权重 +0.1（≤1.5）。
-3. `loss_brake`：当日已实现亏损 ≤ −2% 起始权益 → `base_notional_usdt` ×0.5（≥20）且 `entry_threshold` +0.1（≤0.9）；当日 ≥ +2% 且名义低于默认 → ×1.25 回升（≤100）。
+3. `loss_brake`：当日已实现亏损 ≤ −2% 起始权益 → `base_notional_usdt` ×0.5（≥50，低于交易所最小名义 100 USDT 太多的下单只会被跳过）且 `entry_threshold` +0.1（≤0.9）；当日 ≥ +2% 且名义低于默认 → ×1.25 回升（≤100）。
 4. `overtrading_brake`：窗口内决策 ≥ 10 → `cooldown_s` ×1.5（≤3600）且 `entry_threshold` +0.05（≤0.9）。
 
 模型 `TuningChange(ts, rule, field, old, new, reason)`；`Store` 新增 `insert_tuning_change`、`tuning_log(limit)`、`count_signals_since(ts)`、`count_decisions_since(ts)`；CLI `tuning` 与 `status` 展示当前生效参数。

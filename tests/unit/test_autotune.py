@@ -126,7 +126,7 @@ async def test_loss_brake_notional_floor_and_threshold_cap(st):
     t = mk(st, clock=lambda: now.timestamp())
     for _ in range(10):
         await t.tick()
-    assert t.strategy_cfg.base_notional_usdt == Decimal(20)
+    assert t.strategy_cfg.base_notional_usdt == Decimal(50)
     assert t.strategy_cfg.entry_threshold <= 0.9 + 1e-9
 
 
@@ -209,8 +209,22 @@ async def test_effective_values_persisted_to_kv(st):
     assert snap["strategy"]["detector_weights"]["news_sentiment"] == 1.0
 
 
-async def test_run_ticks_and_stops_promptly(st):
+async def test_run_waits_a_full_interval_before_first_tick(st):
     t = mk(st, interval_s=3600)
+    task = asyncio.create_task(t.run())
+    for _ in range(100):
+        if await st.get_kv("tuning_effective") is not None:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)
+    await t.stop()
+    await asyncio.wait_for(task, timeout=1)
+    assert await st.get_kv("tuning_effective") is not None  # published right away
+    assert await st.tuning_log(100) == []  # but no tick yet
+
+
+async def test_run_ticks_and_stops_promptly(st):
+    t = mk(st, interval_s=0.2)
     task = asyncio.create_task(t.run())
     for _ in range(100):
         if await st.tuning_log(1):
@@ -224,7 +238,7 @@ async def test_run_ticks_and_stops_promptly(st):
 
 async def _tuned_snapshot(st):
     """Publish the values a tuned process would leave behind."""
-    s = StrategyConfig(entry_threshold=0.85, base_notional_usdt=Decimal(25), cooldown_s=2025)
+    s = StrategyConfig(entry_threshold=0.85, base_notional_usdt=Decimal(60), cooldown_s=2025)
     s.detector_weights["funding_extreme"] = 0.0
     d = DetectorConfig(liquidation_notional_threshold_usdt=Decimal(12005),
                        funding_annualized_threshold=Decimal("0.1536"), news_min_confidence=0.45)
@@ -238,7 +252,7 @@ async def test_restore_effective_copies_tuned_values_onto_shared_configs(st):
     t = AutoTuner(st, strategy, detectors, clock=lambda: T0.timestamp())
     assert await t.restore_effective() is True
     assert t.strategy_cfg is strategy and t.detector_cfg is detectors and strategy.detector_weights is weights
-    assert strategy.entry_threshold == 0.85 and strategy.base_notional_usdt == Decimal(25)
+    assert strategy.entry_threshold == 0.85 and strategy.base_notional_usdt == Decimal(60)
     assert strategy.cooldown_s == 2025 and weights["funding_extreme"] == 0.0 and weights["news_sentiment"] == 1.0
     assert detectors.liquidation_notional_threshold_usdt == Decimal(12005)
     assert detectors.funding_annualized_threshold == Decimal("0.1536")
@@ -254,7 +268,7 @@ async def test_restore_effective_clamps_and_ignores_unknown_detectors(st):
     }))
     strategy, detectors = StrategyConfig(), DetectorConfig()
     assert await AutoTuner(st, strategy, detectors).restore_effective() is True
-    assert strategy.entry_threshold == 0.9 and strategy.base_notional_usdt == Decimal(20)
+    assert strategy.entry_threshold == 0.9 and strategy.base_notional_usdt == Decimal(50)
     assert strategy.cooldown_s == 3600 and strategy.detector_weights["news_sentiment"] == 1.5
     assert "made_up" not in strategy.detector_weights
     assert detectors.funding_annualized_threshold == Decimal("0.05")
@@ -289,7 +303,7 @@ async def test_restore_effective_missing_or_malformed_changes_nothing(st):
 async def test_run_restores_before_first_tick(st):
     await _tuned_snapshot(st)
     strategy = StrategyConfig()
-    t = AutoTuner(st, strategy, DetectorConfig(), interval_s=3600, clock=lambda: T0.timestamp())
+    t = AutoTuner(st, strategy, DetectorConfig(), interval_s=0.2, clock=lambda: T0.timestamp())
     task = asyncio.create_task(t.run())
     for _ in range(100):
         if await st.tuning_log(1):
@@ -299,6 +313,6 @@ async def test_run_restores_before_first_tick(st):
     await asyncio.wait_for(task, timeout=1)
     # restored 0.85, then the quiet-market tick relaxed it one step (not the default 0.6 − 0.05)
     assert abs(strategy.entry_threshold - 0.80) < 1e-9
-    assert strategy.base_notional_usdt == Decimal(25)
+    assert strategy.base_notional_usdt == Decimal(60)
     snap = json.loads(await st.get_kv("tuning_effective"))
     assert abs(snap["strategy"]["entry_threshold"] - 0.80) < 1e-9

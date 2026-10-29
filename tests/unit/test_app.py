@@ -140,7 +140,10 @@ async def test_create_components_wires_autotuner_to_shared_configs(tmp_path, exc
 
 
 async def test_app_runs_autotuner_supervised(tmp_path, exchange_info):
+    from ai_trader.strategy.autotune import AutoTuner
+
     c = await _components(tmp_path, exchange_info)
+    c.tuner = AutoTuner(c.store, c.settings.strategy, c.settings.detectors, interval_s=0.05)
     app = App(c)
     task = asyncio.create_task(app.run())
     for _ in range(200):

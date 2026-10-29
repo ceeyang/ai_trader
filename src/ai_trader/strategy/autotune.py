@@ -2,7 +2,9 @@
 
 User requirement (2026-10-29): "如果结果出现偏差，或者实测数据不好，你需要自动调整策略。"
 
-Every `interval_s` the tuner runs `tick()`, which evaluates four rules in this order, each
+Every `interval_s` the tuner runs `tick()` — the first one only after a full interval
+has passed since `run()` started, so a fresh (or restarted) process does not judge a
+market it has barely observed — which evaluates four rules in this order, each
 moving its fields at most one step per tick:
 
 1. `activity_floor` — fewer than 3 signals and no decision in the last `activity_window_s`:
@@ -12,7 +14,7 @@ moving its fields at most one step per tick:
    < 0.40 and mean < 0 → weight −0.25 (≥ 0, 0 disables it); hit rate ≥ 0.55 and mean > 0 →
    weight +0.1 (≤ 1.5).
 3. `loss_brake` — today's realized pnl ≤ −2 % of the day's starting equity (skipped while
-   `day_start_equity:<UTC date>` is missing) → `base_notional_usdt` ×0.5 (≥ 20) and
+   `day_start_equity:<UTC date>` is missing) → `base_notional_usdt` ×0.5 (≥ 50) and
    `entry_threshold` +0.1 (≤ 0.9); ≥ +2 % with the notional below the default 100 → ×1.25
    (≤ 100).
 4. `overtrading_brake` — at least 10 decisions in the last `activity_window_s` →
@@ -23,7 +25,7 @@ objects the aggregator, detectors and execution service hold and read on every u
 field already at its floor/cap is left alone and not logged; every actual change is
 written to `tuning_log` and logged. The tuner never sees, let alone changes, `RiskLimits`.
 
-After every tick (and when `run()` starts) the current effective values are written as
+After every tick (and immediately when `run()` starts) the current effective values are written as
 JSON to kv `tuning_effective`, so `ai-trader status` in another process can show them.
 `run()` first restores those values onto the config objects (`restore_effective`), so a
 restarted process keeps its brakes and relaxations instead of falling back to defaults.
@@ -60,7 +62,7 @@ BAD_HIT_RATE, GOOD_HIT_RATE = 0.40, 0.55
 WEIGHT_PENALTY, WEIGHT_BONUS, WEIGHT_CAP = 0.25, 0.1, 1.5
 # loss_brake
 DAILY_PNL_PCT = Decimal("0.02")
-NOTIONAL_CUT, NOTIONAL_FLOOR = Decimal("0.5"), Decimal(20)
+NOTIONAL_CUT, NOTIONAL_FLOOR = Decimal("0.5"), Decimal(50)
 NOTIONAL_RECOVER, NOTIONAL_DEFAULT = Decimal("1.25"), Decimal(100)
 ENTRY_BRAKE_STEP, ENTRY_CAP = 0.1, 0.9
 # overtrading_brake
@@ -91,7 +93,7 @@ class AutoTuner:
         strategy_cfg: StrategyConfig,
         detector_cfg: DetectorConfig,
         *,
-        interval_s: int = 1800,
+        interval_s: float = 1800,
         activity_window_s: int = 7200,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -297,12 +299,15 @@ class AutoTuner:
         except Exception:
             log.exception("autotune: restoring/publishing effective parameters failed")
         while not self._stop_event.is_set():
+            # Wait a full interval first: no tick on a market observed for seconds only.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self._interval_s)
+            if self._stop_event.is_set():
+                return
             try:
                 await self.tick()
             except Exception:
                 log.exception("autotune tick failed")
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._stop_event.wait(), timeout=self._interval_s)
 
     async def stop(self) -> None:
         self._stop_event.set()
