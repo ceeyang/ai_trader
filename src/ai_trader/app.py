@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ai_trader.analysis.detectors.base import DetectorRunner
+from ai_trader.analysis.detectors.base import Detector, DetectorRunner
 from ai_trader.analysis.detectors.funding_extreme import FundingExtremeDetector
 from ai_trader.analysis.detectors.liquidation_burst import LiquidationBurstDetector
 from ai_trader.analysis.detectors.news_sentiment import NewsSentimentDetector
@@ -76,7 +76,7 @@ class Components:
     feed: MarketFeed
     watchdog: StalenessWatchdog
     sampler: MarkPriceSampler
-    detectors: list
+    detectors: list[Detector]
     runner: DetectorRunner
     poller: NewsPoller
     aggregator: SignalAggregator
@@ -173,7 +173,7 @@ async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, s
     sampler = MarkPriceSampler(bus, store)
 
     classifier = _build_classifier(settings, http)
-    detectors = [
+    detectors: list[Detector] = [
         FundingExtremeDetector(settings.detectors, state),
         LiquidationBurstDetector(settings.detectors, state),
         NewsSentimentDetector(

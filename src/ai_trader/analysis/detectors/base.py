@@ -4,7 +4,7 @@ the others (design 5.6)."""
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from ai_trader.bus import EventBus
 from ai_trader.models import Signal
@@ -17,7 +17,9 @@ class Detector(Protocol):
     name: str
     subscribes_to: tuple[type, ...]
 
-    async def on_event(self, event: object) -> list[Signal]: ...
+    # `Any`: each detector narrows it to the types in its `subscribes_to`, which is all
+    # the runner ever routes to it.
+    async def on_event(self, event: Any) -> list[Signal]: ...
 
 
 class DetectorRunner:

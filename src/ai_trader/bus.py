@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
 
 log = logging.getLogger(__name__)
 
@@ -14,7 +14,8 @@ T = TypeVar("T")
 @dataclass
 class _Subscription:
     event_type: type
-    handler: Callable[[object], Awaitable[None]]
+    # Handlers may return a value (e.g. the aggregator's Decision); the bus ignores it.
+    handler: Callable[[Any], Awaitable[object]]
     queue: asyncio.Queue
     task: asyncio.Task | None = None
     in_flight: int = 0
@@ -29,7 +30,7 @@ class EventBus:
     def subscribe(
         self,
         event_type: type[T],
-        handler: Callable[[T], Awaitable[None]],
+        handler: Callable[[T], Awaitable[object]],
         *,
         maxsize: int = 10_000,
     ) -> None:

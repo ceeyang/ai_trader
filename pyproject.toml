@@ -1,7 +1,7 @@
 [project]
 name = "ai-trader"
-version = "0.1.0"
-description = "Add your description here"
+version = "2.0.0a0"
+description = "Event-driven Binance USDT-M futures trading daemon (testnet first): market data + news sentiment signals, hard risk limits, paper/live execution and an auto-tuner"
 readme = "README.md"
 authors = [
     { name = "ceeyang", email = "ceeyang2024@gmail.com" }
@@ -36,6 +36,11 @@ markers = [
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
 
 [dependency-groups]
 dev = [

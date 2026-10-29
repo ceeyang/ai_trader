@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from ai_trader.bus import EventBus
 from ai_trader.data.market_state import MarketState
 from ai_trader.exchange.binance.parsers import parse_force_order, parse_kline, parse_mark_price
-from ai_trader.exchange.binance.ws import BinanceFuturesWS, market_stream_url
+from ai_trader.exchange.binance.ws import BinanceFuturesWS, StreamClient, market_stream_url
 from ai_trader.models import DataFresh, DataStale, MarkPrice, utc_now
 from ai_trader.storage.db import Store
 
@@ -39,13 +39,13 @@ class MarketFeed:
         ws_url: str,
         symbols: Sequence[str],
         *,
-        ws_factory: Callable[[str, Callable[[dict], Awaitable[None]]], object] | None = None,
+        ws_factory: Callable[[str, Callable[[dict], Awaitable[None]]], StreamClient] | None = None,
     ) -> None:
         self._bus = bus
         self._state = state
         url = market_stream_url(ws_url, build_stream_names(symbols))
         factory = ws_factory or BinanceFuturesWS
-        self._ws = factory(url, self.handle)
+        self._ws: StreamClient = factory(url, self.handle)
 
     async def handle(self, msg: dict) -> None:
         event_type = msg.get("e")

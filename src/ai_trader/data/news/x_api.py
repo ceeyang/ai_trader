@@ -61,7 +61,7 @@ class XSearchSource:
                 self._budget_warned_day = today
             return []
 
-        params = {
+        params: dict[str, str | int] = {
             "query": self._query,
             "max_results": self._max_results,
             "tweet.fields": "created_at,author_id,public_metrics",
@@ -124,7 +124,8 @@ class XSearchSource:
 
     def _to_news_item(self, tweet: dict, users: dict[str, str]) -> NewsItem:
         tweet_id = tweet["id"]
-        username = users.get(tweet.get("author_id"))
+        author_id = tweet.get("author_id")
+        username = users.get(author_id) if isinstance(author_id, str) else None
         text = tweet.get("text", "")
         return NewsItem(
             id=f"x:{tweet_id}",

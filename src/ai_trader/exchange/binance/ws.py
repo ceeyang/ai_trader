@@ -33,6 +33,14 @@ def redact_url(url: str) -> str:
     return url
 
 
+class StreamClient(Protocol):
+    """What consumers need from a stream client (`BinanceFuturesWS` or a test fake)."""
+
+    async def run(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+
 class _Conn(Protocol):
     """The part of a websockets client connection this module uses."""
 
