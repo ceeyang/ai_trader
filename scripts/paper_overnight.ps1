@@ -22,8 +22,19 @@ $env:DETECTORS__LIQUIDATION_NOTIONAL_THRESHOLD_USDT = "10000"
 $env:LOG_JSON = "false"
 $env:LOG_LEVEL = "INFO"
 # Paper-only: the consecutive-loss stop has no time window and only resets on a winning fill, which
-# cannot happen once OPENs are blocked; relax it for the data-collection run (daily-loss 5% still applies).
+# cannot happen once OPENs are blocked; relax it for the data-collection run.
 $env:RISK__MAX_CONSECUTIVE_LOSSES = "8"
+
+# --- aggressive multi-symbol paper profile (user request 2026-10-29: 激进量化, 多币种) ---
+# All 14 symbols verified as TRADING perpetuals on testnet.binancefuture.com.
+$env:SYMBOLS = '["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","DOTUSDT","TRXUSDT","SUIUSDT","NEARUSDT"]'
+$env:LEVERAGE = "5"
+$env:RISK__MAX_LEVERAGE = "5"
+$env:STRATEGY__BASE_NOTIONAL_USDT = "500"
+$env:RISK__MAX_ORDER_NOTIONAL_USDT = "1000"
+$env:RISK__MAX_TOTAL_EXPOSURE_USDT = "5000"
+$env:RISK__MAX_OPEN_POSITIONS = "6"
+$env:RISK__MAX_DAILY_LOSS_PCT = "10"
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $log = Join-Path $Repo "data\paper-run-$stamp.log"
