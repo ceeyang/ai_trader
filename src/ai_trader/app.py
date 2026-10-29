@@ -6,6 +6,13 @@ broker, aggregator and execution service, then runs every long-lived component
 (including the AutoTuner) under a supervisor in one `asyncio.TaskGroup`: a component that
 raises is logged and restarted with backoff, so one crashing component never takes the
 process down. `App.stop()` stops everything in reverse order and is idempotent.
+
+The supervised `control` loop (every `control_interval_s`, default 15 s) lets other
+processes steer the daemon through the kv table: kv `kill_switch == "1"` (set by
+`ai-trader kill`) runs the in-process `KillSwitch.trigger` once per activation, so the
+running broker (paper or live) is flattened; kv `stop_requested == "1"` (set by
+`ai-trader stop`) resets the flag to "0" and stops the app. A stale `stop_requested`
+left from before start-up is cleared when the app starts.
 """
 
 import asyncio
@@ -52,6 +59,9 @@ DEFAULT_BACKOFF_S: tuple[float, ...] = (1, 2, 5, 10, 30)
 HEALTH_INTERVAL_S = 60.0
 STABLE_RUN_S = 60.0  # a run longer than this resets the backoff schedule
 STOP_GRACE_S = 15.0
+CONTROL_INTERVAL_S = 15.0
+KILL_KV_KEY = "kill_switch"
+STOP_KV_KEY = "stop_requested"
 
 
 @dataclass
@@ -222,6 +232,7 @@ class App:
         backoff_s: Sequence[float] = DEFAULT_BACKOFF_S,
         health_interval_s: float = HEALTH_INTERVAL_S,
         stop_grace_s: float = STOP_GRACE_S,
+        control_interval_s: float = CONTROL_INTERVAL_S,
     ) -> None:
         if not backoff_s:
             raise ValueError("backoff_s must not be empty")
@@ -229,6 +240,8 @@ class App:
         self._backoff_s = tuple(backoff_s)
         self._health_interval_s = health_interval_s
         self._stop_grace_s = stop_grace_s
+        self._control_interval_s = control_interval_s
+        self._kill_handled = False  # the current kv kill activation was already acted on
         self._stopping = asyncio.Event()
         self._done = asyncio.Event()
         self._run_task: asyncio.Task | None = None
@@ -247,6 +260,7 @@ class App:
             ("tracker", lambda: c.tracker.run()),
             ("tuner", lambda: c.tuner.run()),
             ("health", self._health_loop),
+            ("control", self._control_loop),
         ]
 
     async def run(self) -> None:
@@ -259,6 +273,9 @@ class App:
         c = self.c
         try:
             await c.store.open()
+            if await c.store.get_kv(STOP_KV_KEY) == "1":
+                log.warning("clearing a stale %s flag left from before start-up", STOP_KV_KEY)
+                await c.store.set_kv(STOP_KV_KEY, "0")
             await c.bus.start()
             await c.broker.start()
             await c.aggregator.start()
@@ -357,6 +374,41 @@ class App:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._stopping.wait(), timeout=delay)
 
+    # ---- external control (kv flags) ---------------------------------------
+
+    async def _control_loop(self) -> None:
+        while not self._stopping.is_set():
+            try:
+                await self._check_control()
+            except Exception:
+                log.exception("control check failed")
+            if self._stopping.is_set():
+                return
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=self._control_interval_s)
+
+    async def _check_control(self) -> None:
+        c = self.c
+        if await c.store.get_kv(KILL_KV_KEY) == "1":
+            if not self._kill_handled:
+                self._kill_handled = True
+                if not c.kill_switch.triggered:
+                    log.error("kill flag observed in kv; flattening the in-process broker")
+                    await c.kill_switch.trigger("kill flag observed")
+        else:
+            # Reset (e.g. `ai-trader kill --reset`): a later kill acts again.
+            self._kill_handled = False
+            c.kill_switch.triggered = False
+        if await c.store.get_kv(STOP_KV_KEY) == "1":
+            log.warning("stop requested via kv %s; shutting down", STOP_KV_KEY)
+            try:
+                await c.store.set_kv(STOP_KV_KEY, "0")
+            finally:
+                # Not `self.stop()`: that waits for run() to finish, and run() is waiting
+                # for this very task.
+                self._stopping.set()
+                await self._stop_components()
+
     # ---- health -----------------------------------------------------------
 
     async def _health_loop(self) -> None:
@@ -378,10 +430,12 @@ class App:
         positions = c.broker.positions_snapshot()
         pos_text = ",".join(f"{s}:{p.side.value}:{p.quantity}" for s, p in positions.items()) or "none"
         kill = "ACTIVE" if await c.kill_switch.is_active() else "off"
+        stale_news = sum(getattr(d, "stale_skipped", 0) for d in c.detectors)
         log.info(
-            "health: mark_age[%s] counts[%s] positions[%s] kill_switch=%s",
+            "health: mark_age[%s] counts[%s] positions[%s] kill_switch=%s stale_news_skipped=%d",
             " ".join(ages),
             " ".join(f"{k}={v}" for k, v in counts.items()),
             pos_text,
             kill,
+            stale_news,
         )

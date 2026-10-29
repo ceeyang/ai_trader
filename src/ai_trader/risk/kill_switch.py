@@ -7,8 +7,13 @@ degrade rather than abort: discovering positions and discovering open-order symb
 each independently fault-tolerant (a failure on one side still lets the other side's
 symbols get flattened), cancelling and closing a given symbol are independent attempts
 (a failed cancel must not skip the close), and a failure on one symbol must not stop the
-rest of the sweep. The flag write, the final `KillSwitchTriggered` publish and the ERROR
-log happen unconditionally, even if every single broker call above failed.
+rest of the sweep. The final `KillSwitchTriggered` publish and the ERROR log happen
+unconditionally, even if every single broker call above failed; a failed flag write is
+logged and the sweep still runs. Every failure is also appended to `last_errors` (reset
+at the start of each `trigger`), so a caller such as `ai-trader kill` can report it.
+
+`triggered` is True once `trigger()` ran in this process; the App's control loop uses
+it so an externally set kv flag flattens the in-process broker exactly once.
 """
 
 import logging
@@ -31,9 +36,17 @@ class KillSwitch:
         self._store = store
         self._broker = broker
         self._bus = bus
+        self.triggered = False
+        self.last_errors: list[str] = []
 
     async def trigger(self, reason: str) -> None:
-        await self._store.set_kv(_KEY, "1")
+        self.triggered = True
+        self.last_errors = []
+        try:
+            await self._store.set_kv(_KEY, "1")
+        except Exception as exc:
+            log.exception("kill switch: persisting the flag failed: %s", type(exc).__name__)
+            self.last_errors.append(f"persist flag: {type(exc).__name__}: {exc}")
         try:
             positions = await self._positions_or_empty()
             order_symbols = await self._open_order_symbols_or_empty()
@@ -48,6 +61,7 @@ class KillSwitch:
             return await self._broker.positions()
         except Exception as exc:
             log.exception("kill switch: failed to fetch open positions: %s", type(exc).__name__)
+            self.last_errors.append(f"fetch positions: {type(exc).__name__}: {exc}")
             return {}
 
     async def _open_order_symbols_or_empty(self) -> set[str]:
@@ -55,6 +69,7 @@ class KillSwitch:
             return await self._broker.open_order_symbols()
         except Exception as exc:
             log.exception("kill switch: failed to fetch open order symbols: %s", type(exc).__name__)
+            self.last_errors.append(f"fetch open orders: {type(exc).__name__}: {exc}")
             return set()
 
     async def _flatten(self, symbol: str, *, has_position: bool) -> None:
@@ -64,6 +79,7 @@ class KillSwitch:
             await self._broker.cancel_all(symbol)
         except Exception as exc:
             log.exception("kill switch: cancel_all failed for %s: %s", symbol, type(exc).__name__)
+            self.last_errors.append(f"{symbol} cancel_all: {type(exc).__name__}: {exc}")
         if has_position:
             try:
                 await self._broker.close_position(symbol)
@@ -71,9 +87,17 @@ class KillSwitch:
                 log.exception(
                     "kill switch: close_position failed for %s: %s", symbol, type(exc).__name__
                 )
+                self.last_errors.append(f"{symbol} close_position: {type(exc).__name__}: {exc}")
 
     async def is_active(self) -> bool:
         return await self._store.get_kv(_KEY) == "1"
 
     async def reset(self) -> None:
-        await self._store.set_kv(_KEY, "0")
+        await self.reset_flag(self._store)
+        self.triggered = False
+
+    @staticmethod
+    async def reset_flag(store: Store) -> None:
+        """Clear the persistent flag (kv `kill_switch=0`); usable without a broker
+        (`ai-trader kill --reset`)."""
+        await store.set_kv(_KEY, "0")

@@ -2,11 +2,27 @@ import asyncio
 from datetime import timedelta
 from decimal import Decimal
 
-from conftest import T0, make_signal
+import pytest
+from conftest import T0, fx, make_signal
 from typer.testing import CliRunner
 
 from ai_trader.cli import app
 from ai_trader.storage.db import Store
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cwd(tmp_path, monkeypatch):
+    """`Settings()` reads `.env` from the working directory: never the developer's real one."""
+    monkeypatch.chdir(tmp_path)
+
+
+async def _kv(path, key):
+    st = Store(path)
+    await st.open()
+    try:
+        return await st.get_kv(key)
+    finally:
+        await st.close()
 
 
 def test_cli_run_live_mainnet_requires_confirm(monkeypatch):
@@ -158,3 +174,43 @@ def test_cli_status_survives_unreadable_kv(tmp_path, monkeypatch):
     assert r.exit_code == 0
     assert "unreadable kv `tuning_effective`" in r.output and "unreadable kv `paper_state`" in r.output
     assert "last signals" in r.output
+
+
+def test_cli_stop_sets_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "stop.db"))
+    r = CliRunner().invoke(app, ["stop"])
+    assert r.exit_code == 0 and "15 s" in r.output
+    assert asyncio.run(_kv(tmp_path / "stop.db", "stop_requested")) == "1"
+
+
+def test_cli_kill_reset_clears_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "r.db"))
+    monkeypatch.setenv("MODE", "paper")
+    assert CliRunner().invoke(app, ["kill"]).exit_code == 0
+    assert asyncio.run(_kv(tmp_path / "r.db", "kill_switch")) == "1"
+    r = CliRunner().invoke(app, ["kill", "--reset"])
+    assert r.exit_code == 0 and "inactive" in r.output
+    assert asyncio.run(_kv(tmp_path / "r.db", "kill_switch")) == "0"
+
+
+def test_cli_kill_live_reports_flatten_failures(tmp_path, monkeypatch):
+    import httpx
+    import respx
+
+    base = "https://testnet.binancefuture.com"
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "f.db"))
+    monkeypatch.setenv("MODE", "live")
+    monkeypatch.setenv("BINANCE_API_KEY", "k")
+    monkeypatch.setenv("BINANCE_API_SECRET", "s")
+    err = httpx.Response(400, json={"code": -1000, "msg": "nope"})
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get(f"{base}/fapi/v1/time").respond(json={"serverTime": 1793217600000})
+        mock.get(f"{base}/fapi/v1/exchangeInfo").respond(json=fx("exchange_info.json"))
+        mock.get(url__startswith=f"{base}/fapi/v2/positionRisk").respond(json=fx("position_risk_v2.json"))
+        mock.get(url__startswith=f"{base}/fapi/v1/openOrders").respond(json=[])
+        mock.delete(url__startswith=f"{base}/fapi/v1/allOpenOrders").mock(return_value=err)
+        mock.post(f"{base}/fapi/v1/order").mock(return_value=err)
+        r = CliRunner().invoke(app, ["kill"])
+    assert r.exit_code == 1, r.output
+    assert "had failures" in r.output and "BTCUSDT cancel_all" in r.output and "BTCUSDT close_position" in r.output
+    assert asyncio.run(_kv(tmp_path / "f.db", "kill_switch")) == "1"

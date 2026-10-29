@@ -64,7 +64,8 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 | `probe` | 检查与配置端点的连通性（ping、服务器时间偏移、合约数、各 symbol 标记价与年化资金费率；有 key 时打印余额） |
 | `classify TEXT` | 把 `TEXT` 当作一条新闻，跑一遍情绪分类器（有 `DEEPSEEK_API_KEY` 用 DeepSeek，否则用关键词兜底），打印 JSON |
 | `run [--mode paper\|live] [--confirm-mainnet]` | 启动交易守护进程直到被中断；`--mode` 覆盖 `.env` 里的 `MODE`；`BINANCE_TESTNET=false` 时必须加 `--confirm-mainnet`，否则退出码 2 |
-| `kill` | 设置持久化杀开关（kv `kill_switch`）；live 模式下同时撤销所有挂单并平掉所有持仓；paper 模式下仅阻止新开仓，已有模拟持仓按其止损/止盈/最大持有时间自然了结 |
+| `kill [--reset]` | 设置持久化杀开关（kv `kill_switch=1`）；live 模式下本命令同时撤销所有挂单并平掉所有持仓（任何 symbol 撤单/平仓失败都会逐条打印并以退出码 1 结束）；正在运行的守护进程（paper 或 live）在 ~15 s 内观察到该标志并对自己的 broker 执行一次全平。`--reset` 清除杀开关（kv `kill_switch=0`）并打印新状态 |
+| `stop` | 请求正在运行的守护进程优雅退出（kv `stop_requested=1`），守护进程在 ~15 s 内停止并把标志复位为 0 |
 | `status` | 打印杀开关状态、当日已实现盈亏、各表计数、当前生效的自动调参参数、最近 10 条信号；paper 模式打印模拟账户，live 模式打印真实持仓/挂单 |
 | `signals` | 打印信号有效性表（按探测器 × 前瞻窗口的样本数、均值收益、命中率） |
 | `tuning` | 打印最近 50 条 AutoTuner 自动调参记录 |
@@ -117,9 +118,14 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 
 杀开关（`KillSwitch`）独立于策略：
 
-- `uv run ai-trader kill`：写入持久化标志 `kv.kill_switch=1`，之后任何开仓决策都会被 `RiskEngine` 拒绝。
-- live 模式下 `kill` 还会主动撤销所有挂单并市价平掉所有持仓；paper 模式下只阻止新开仓，已有模拟仓位按
-  自身止损/止盈/最大持有时间自然了结（因为模拟仓位只存在于正在运行的进程里）。
+- `uv run ai-trader kill`：写入持久化标志 `kv.kill_switch=1`，之后任何决策（包括平仓）都会被 `RiskEngine`
+  拒绝，最大持有时间检查也不再发平仓决策（全平由杀开关自己负责）。
+- live 模式下 `kill` 命令本身会撤销所有挂单并市价平掉所有持仓，失败项逐条打印并以退出码 1 结束。
+- 正在运行的守护进程每 15 s 检查一次 kv：看到 `kill_switch=1` 时对进程内的 broker 执行一次
+  `KillSwitch.trigger`（paper 模式下模拟仓位就是这样被平掉的），每次激活只执行一次。
+- `uv run ai-trader kill --reset`：清除杀开关（kv `kill_switch=0`），恢复开仓。
+- `uv run ai-trader stop`：写入 kv `stop_requested=1`，守护进程 ~15 s 内优雅退出并把标志复位；启动时若发现
+  遗留的 `stop_requested=1` 会先清除，避免一启动就退出。
 - `BinanceFuturesBroker` 每 60 s 用真实持仓对账本地缓存，发现不一致时按配置可以自动触发杀开关
   （默认 `on_mismatch="kill"`）。
 
@@ -174,7 +180,13 @@ powershell -ExecutionPolicy Bypass -File scripts\paper_overnight.ps1
 输出 `started pid=... log=data\paper-run-<timestamp>.log`，PID 同时写入 `data\paper-run.pid`，日志落在
 `data\paper-run-<timestamp>.log` / `.err.log`，数据库是 `data\ai_trader.db`。
 
-停止：
+停止（优雅退出，推荐）：
+
+```powershell
+uv run ai-trader stop       # ~15 s 内退出
+```
+
+强制停止（守护进程无响应时）：
 
 ```powershell
 taskkill /PID (Get-Content data\paper-run.pid) /T /F

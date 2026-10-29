@@ -13,7 +13,9 @@ unless the verdict approves it.
 * `Fill`s are persisted; `OrderResult`s update order status. A protective order that
   fills (seen as either its `Fill` or its FILLED `OrderResult`) cancels its sibling.
 * `enforce_max_hold()` (every 60 s from `run()`) publishes a CLOSE decision for any
-  position held at least its decision's `max_hold_s`.
+  position held at least its decision's `max_hold_s` — except while the kill switch
+  (kv `kill_switch`) is active: the risk engine would reject those CLOSEs anyway and the
+  kill switch's own sweep does the flattening.
 """
 
 import asyncio
@@ -339,6 +341,8 @@ class ExecutionService:
     # ---- max hold ---------------------------------------------------------
 
     async def enforce_max_hold(self) -> None:
+        if await self._store.get_kv("kill_switch") == "1":
+            return  # KillSwitch flattens; a CLOSE decision would only be rejected
         now = self._clock()
         positions = await self._broker.positions()
         for symbol, held in list(self._entry_time.items()):

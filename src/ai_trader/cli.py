@@ -183,7 +183,7 @@ def _today_utc_midnight():
     return datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-async def _kill() -> None:
+async def _kill(reset: bool = False) -> None:
     import httpx
 
     from ai_trader.bus import EventBus
@@ -198,13 +198,18 @@ async def _kill() -> None:
     store = Store(s.db_path)
     await store.open()
     try:
+        if reset:
+            await KillSwitch.reset_flag(store)
+            state = "ACTIVE" if await store.get_kv("kill_switch") == "1" else "inactive"
+            print(f"kill switch reset: {state} (new entries are allowed again)")
+            return
         # Persist the flag first: whatever happens to the flatten below, the running
         # process rejects every new entry from now on.
         await store.set_kv("kill_switch", "1")
         if s.mode == "paper":
             print(
-                "kill switch set (paper mode): the running process rejects new entries from now on; "
-                "paper positions live in that process and close via their stops or max-hold."
+                "kill switch set (paper mode): the running process rejects new entries from now on "
+                "and flattens its paper positions when it observes the flag (within ~15 s)."
             )
             return
         print("kill switch flag set; flattening live positions...")
@@ -224,9 +229,16 @@ async def _kill() -> None:
             print(f"flatten NOT run: REST setup failed ({type(exc).__name__}); positions may still be open")
             raise typer.Exit(1) from None
         else:
-            # KillSwitch.trigger tolerates per-symbol failures and logs them.
-            await KillSwitch(store, broker, bus).trigger("manual kill via CLI")
-            print("kill switch triggered: flatten sweep ran over all positions and open orders (see log for failures)")
+            # KillSwitch.trigger tolerates per-symbol failures and records them.
+            ks = KillSwitch(store, broker, bus)
+            await ks.trigger("manual kill via CLI")
+            if ks.last_errors:
+                print("kill switch triggered, but the flatten sweep had failures:")
+                for err in ks.last_errors:
+                    print(f"  {err}")
+                print("positions or orders may still be open; check `ai-trader status`")
+                raise typer.Exit(1)
+            print("kill switch triggered: flatten sweep ran over all positions and open orders")
         finally:
             await rest.aclose()
     finally:
@@ -234,9 +246,31 @@ async def _kill() -> None:
 
 
 @app.command()
-def kill() -> None:
+def kill(
+    reset: bool = typer.Option(False, "--reset", help="clear the kill switch (kv kill_switch=0) instead of setting it"),
+) -> None:
     """Set the persistent kill switch (live mode: also flatten positions and cancel orders)."""
-    asyncio.run(_kill())
+    asyncio.run(_kill(reset))
+
+
+async def _stop() -> None:
+    from ai_trader.settings import Settings
+    from ai_trader.storage.db import Store
+
+    s = Settings()
+    store = Store(s.db_path)
+    await store.open()
+    try:
+        await store.set_kv("stop_requested", "1")
+    finally:
+        await store.close()
+    print("stop requested: the running daemon will shut down gracefully within ~15 s")
+
+
+@app.command()
+def stop() -> None:
+    """Ask the running daemon to shut down gracefully (kv stop_requested=1)."""
+    asyncio.run(_stop())
 
 
 # What a malformed kv JSON blob can raise while being read (JSONDecodeError is a ValueError,

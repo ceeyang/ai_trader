@@ -182,3 +182,89 @@ async def test_paper_broker_state_survives_app_restart(tmp_path, exchange_info):
     assert c2.broker.positions_snapshot()["BTCUSDT"].quantity == Decimal("0.002")
     await c2.store.close()
     await c2.http.aclose()
+
+
+class CountingKillSwitch:
+    def __init__(self, real) -> None:
+        self._real = real
+        self.calls: list[str] = []
+
+    @property
+    def triggered(self) -> bool:
+        return self._real.triggered
+
+    @triggered.setter
+    def triggered(self, value: bool) -> None:
+        self._real.triggered = value
+
+    async def trigger(self, reason: str) -> None:
+        self.calls.append(reason)
+        await self._real.trigger(reason)
+
+    async def is_active(self) -> bool:
+        return await self._real.is_active()
+
+
+async def _wait_for(pred, n=300):
+    for _ in range(n):
+        if pred():
+            return True
+        await asyncio.sleep(0.01)
+    return False
+
+
+async def test_control_loop_triggers_kill_switch_once_and_flattens(tmp_path, exchange_info):
+    from decimal import Decimal
+
+    from conftest import make_mark_price
+
+    from ai_trader.models import OrderRequest, OrderType, Side
+
+    c = await _components(tmp_path, exchange_info)
+    ks = CountingKillSwitch(c.kill_switch)
+    c.kill_switch = ks
+    app = App(c, control_interval_s=0.02)
+    task = asyncio.create_task(app.run())
+    assert await _wait_for(lambda: c.store._db is not None)
+    c.state.update_mark(make_mark_price(mark=Decimal(80000)))
+    await c.broker.submit(OrderRequest(symbol="BTCUSDT", side=Side.BUY, type=OrderType.MARKET,
+                                       quantity=Decimal("0.002"), client_order_id="ait-k"))
+    await c.store.set_kv("kill_switch", "1")
+    assert await _wait_for(lambda: bool(ks.calls))
+    await asyncio.sleep(0.1)  # several more control passes with the flag still set
+    assert ks.calls == ["kill flag observed"]
+    assert c.broker.positions_snapshot() == {}
+    await app.stop()
+    await asyncio.wait_for(task, 5)
+
+
+async def test_stop_flag_stops_app_and_is_reset(tmp_path, exchange_info):
+    c = await _components(tmp_path, exchange_info)
+    app = App(c, control_interval_s=0.02)
+    task = asyncio.create_task(app.run())
+    assert await _wait_for(lambda: c.store._db is not None)
+    await c.store.set_kv("stop_requested", "1")
+    await asyncio.wait_for(task, 5)
+    assert c.rest.closed
+    from ai_trader.storage.db import Store
+
+    st = Store(tmp_path / "a.db")
+    await st.open()
+    assert await st.get_kv("stop_requested") == "0"
+    await st.close()
+
+
+async def test_stale_stop_flag_is_cleared_at_start(tmp_path, exchange_info):
+    from ai_trader.storage.db import Store
+
+    st = Store(tmp_path / "a.db")
+    await st.open()
+    await st.set_kv("stop_requested", "1")
+    await st.close()
+    c = await _components(tmp_path, exchange_info)
+    app = App(c, control_interval_s=0.02)
+    task = asyncio.create_task(app.run())
+    await asyncio.sleep(0.2)
+    assert not task.done()
+    await app.stop()
+    await asyncio.wait_for(task, 5)

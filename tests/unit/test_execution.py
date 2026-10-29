@@ -344,3 +344,21 @@ async def test_preexisting_position_is_tracked_for_max_hold_after_start(bus, st,
     assert [(d.intent, d.symbol, d.side) for d in decisions] == [(Intent.CLOSE, "BTCUSDT", Side.SELL)]
     assert await paper.positions() == {}
     await svc.stop()
+
+
+async def test_max_hold_suppressed_while_kill_switch_active(bus, st, state, exchange_info):
+    clock = Clock(T0.timestamp())
+    _paper, svc = await _setup(bus, st, state, exchange_info, clock=clock)
+    decisions: list[Decision] = []
+    bus.subscribe(Decision, lambda e: _append(decisions, e))
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+    await st.set_kv("kill_switch", "1")
+    clock.t = T0.timestamp() + 14401
+    await svc.enforce_max_hold()
+    await bus.drain()
+    assert decisions == [] and await st.count("decisions") == 0
+    await st.set_kv("kill_switch", "0")
+    await svc.enforce_max_hold()
+    await bus.drain()
+    assert [d.intent for d in decisions] == [Intent.CLOSE]
+    await svc.stop()
