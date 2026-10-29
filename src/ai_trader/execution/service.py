@@ -12,6 +12,10 @@ unless the verdict approves it.
   (paper, or a live RESULT response), otherwise when the entry's FILLED `OrderResult`
   arrives on the bus — whichever comes first, exactly once.
 * CLOSE: `cancel_all(symbol)` then `close_position(symbol)`.
+* An entry that ends terminal (EXPIRED/CANCELED/REJECTED/EXPIRED_IN_MATCH) after a
+  partial execution is protected like a FILLED one; with nothing executed it is dropped.
+  A submit that fails with anything but a transport error (the order may still exist)
+  marks the order REJECTED.
 * `Fill`s are persisted; `OrderResult`s update order status. A protective order that
   fills (seen as either its `Fill` or its FILLED `OrderResult`) cancels its sibling.
 * `enforce_max_hold()` (every 60 s from `run()`) publishes a CLOSE decision for any
@@ -67,6 +71,14 @@ _PROTECTIVE_ROLES = {OrderRole.STOP_LOSS, OrderRole.TAKE_PROFIT}
 _UNKNOWN_ORDER = -2011  # Binance: cancel of an order that no longer exists
 # Transport failures after which the order may still exist (and fill) on the exchange.
 _UNCONFIRMED = (BinanceConnectionError, httpx.TimeoutException)
+# Statuses after which an order can no longer fill (any further).
+_TERMINAL = {OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED, OrderStatus.EXPIRED_IN_MATCH}
+
+
+def _entry_filled(res: OrderResult) -> bool:
+    """FILLED, or terminal with a partial execution: the position exists either way (the
+    SL/TP pair is `closePosition=true`, so the executed quantity does not matter)."""
+    return res.status == OrderStatus.FILLED or (res.status in _TERMINAL and res.executed_qty > 0)
 
 
 class _Risk(Protocol):
@@ -193,11 +205,20 @@ class ExecutionService:
             self._awaiting_fill.pop(req.client_order_id, None)
             log.exception("entry order %s for decision %s failed", req.client_order_id, d.id)
             return
-        if res.status == OrderStatus.FILLED:
-            await self._on_entry_filled(req.client_order_id, res)
-        elif res.status not in (OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED):
-            self._awaiting_fill.pop(req.client_order_id, None)
-            log.warning("entry order %s ended %s", req.client_order_id, res.status.value)
+        await self._apply_entry_result(res)
+
+    async def _apply_entry_result(self, res: OrderResult) -> None:
+        """Act on an entry order's (REST or stream) status: protect a position that
+        exists, forget an entry that ended without executing, keep waiting otherwise."""
+        cid = res.client_order_id
+        if _entry_filled(res):
+            if res.status != OrderStatus.FILLED:
+                log.warning("entry order %s ended %s after executing %s; protecting that",
+                            cid, res.status.value, res.executed_qty)
+            await self._on_entry_filled(cid, res)
+        elif res.status in _TERMINAL:
+            self._awaiting_fill.pop(cid, None)
+            log.warning("entry order %s ended %s without executing", cid, res.status.value)
 
     def _round_up_to_minimum(self, filters: SymbolFilters, notional: Decimal, price: Decimal) -> Decimal | None:
         """The exchange-minimum quantity when `notional` fell short of the minimums only
@@ -259,7 +280,10 @@ class ExecutionService:
         await self._store.upsert_order(self._record(req, role, decision_id, None))
         try:
             res = await self._broker.submit(req)
-        except FilterViolation:
+        except _UNCONFIRMED:
+            raise  # may still exist on the exchange: leave the row NEW for the stream
+        except Exception:
+            # FilterViolation, an API rejection, BinanceOrderNotFound, ...: never placed.
             rejected = self._record(req, role, decision_id, None)
             await self._store.upsert_order(rejected.model_copy(update={"status": OrderStatus.REJECTED}))
             raise
@@ -328,10 +352,10 @@ class ExecutionService:
         await self._store.update_order_status(
             res.client_order_id, res.status, res.executed_qty, res.avg_price, res.order_id
         )
-        if res.status != OrderStatus.FILLED:
-            return
         if res.client_order_id in self._awaiting_fill:
-            await self._on_entry_filled(res.client_order_id, res)
+            await self._apply_entry_result(res)
+            return
+        if res.status != OrderStatus.FILLED:
             return
         await self._maybe_cancel_sibling(res.client_order_id, res.symbol)
 

@@ -27,6 +27,11 @@ class BinanceConnectionError(BinanceError):
     """Transport-level failure (connect / read / timeout) talking to Binance."""
 
 
+class BinanceOrderNotFound(BinanceError):
+    """After an unconfirmed POST /order, the lookup by client order id answered -2013
+    (order does not exist): the order never reached the exchange."""
+
+
 class FilterViolation(ValueError):
     """Order quantity / price does not satisfy the symbol's exchange filters."""
 

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from conftest import T0, _append, make_decision, make_fill, make_mark_price
 
-from ai_trader.exchange.binance.errors import BinanceConnectionError
+from ai_trader.exchange.binance.errors import BinanceAPIError, BinanceConnectionError, BinanceOrderNotFound
 from ai_trader.execution.paper import PaperBroker, PaperBrokerError
 from ai_trader.execution.service import ExecutionService
 from ai_trader.models import (
@@ -393,3 +393,110 @@ async def test_open_round_up_respects_max_order_notional(bus, st, state, exchang
     svc = ExecutionService(bus, paper, AlwaysApprove(), st, settings, state=state, clock=lambda: T0.timestamp())
     await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(130)))
     assert paper.submitted == []  # 160 USDT would exceed the 150 cap
+
+
+def _entry_result(cid: str, status: OrderStatus, executed: str) -> OrderResult:
+    return OrderResult(
+        order_id=7, client_order_id=cid, symbol="BTCUSDT", side=Side.BUY,
+        type=OrderType.MARKET, status=status, orig_qty=Decimal("0.002"),
+        executed_qty=Decimal(executed), avg_price=Decimal("80016.00") if Decimal(executed) else Decimal(0),
+        stop_price=None, reduce_only=False, close_position=False, update_time=T0,
+    )
+
+
+class EntryStatusBroker(PaperBroker):
+    """The entry MARKET submit returns a fixed (terminal) status without touching the book."""
+
+    def __init__(self, *a, status: OrderStatus, executed: str, **kw) -> None:
+        super().__init__(*a, **kw)
+        self._status, self._executed = status, executed
+
+    async def submit(self, req):
+        if req.type == OrderType.MARKET and not req.reduce_only:
+            self.submitted.append(req)
+            return _entry_result(req.client_order_id, self._status, self._executed)
+        return await super().submit(req)
+
+
+async def _svc_with(broker, bus, st, state):
+    state.update_mark(make_mark_price(mark=Decimal(80000)))
+    await bus.start()
+    await broker.start()
+    svc = ExecutionService(
+        bus, broker, AlwaysApprove(), st, Settings(_env_file=None), state=state, clock=lambda: T0.timestamp()
+    )
+    await svc.start()
+    return svc
+
+
+async def test_entry_expired_after_partial_fill_is_protected(bus, st, state, exchange_info):
+    broker = EntryStatusBroker(state, bus, exchange_info, status=OrderStatus.EXPIRED, executed="0.001")
+    svc = await _svc_with(broker, bus, st, state)
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+    o = broker.submitted
+    assert [x.type for x in o] == [OrderType.MARKET, OrderType.STOP_MARKET, OrderType.TAKE_PROFIT_MARKET]
+    assert "BTCUSDT" in svc._entry_time and svc._awaiting_fill == {}
+    rec = await st.get_order(o[0].client_order_id)
+    assert rec.status == OrderStatus.EXPIRED and rec.executed_qty == Decimal("0.001")
+    await svc.stop()
+
+
+async def test_entry_terminal_without_execution_is_dropped(bus, st, state, exchange_info):
+    broker = EntryStatusBroker(state, bus, exchange_info, status=OrderStatus.EXPIRED, executed="0")
+    svc = await _svc_with(broker, bus, st, state)
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+    assert len(broker.submitted) == 1 and svc._awaiting_fill == {} and svc._entry_time == {}
+    assert (await st.get_order(broker.submitted[0].client_order_id)).status == OrderStatus.EXPIRED
+    await svc.stop()
+
+
+async def test_stream_terminal_partial_entry_after_unconfirmed_submit_is_protected(bus, st, state, exchange_info):
+    broker = EntryUnconfirmedBroker(state, bus, exchange_info)
+    svc = await _svc_with(broker, bus, st, state)
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+    cid = broker.submitted[0].client_order_id
+    await svc.on_order_result(_entry_result(cid, OrderStatus.CANCELED, "0.001"))
+    assert [x.type for x in broker.submitted][1:] == [OrderType.STOP_MARKET, OrderType.TAKE_PROFIT_MARKET]
+    assert "BTCUSDT" in svc._entry_time and svc._awaiting_fill == {}
+    await svc.stop()
+
+
+async def test_stream_terminal_unexecuted_entry_is_dropped(bus, st, state, exchange_info):
+    broker = EntryUnconfirmedBroker(state, bus, exchange_info)
+    svc = await _svc_with(broker, bus, st, state)
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+    cid = broker.submitted[0].client_order_id
+    await svc.on_order_result(_entry_result(cid, OrderStatus.REJECTED, "0"))
+    assert len(broker.submitted) == 1 and svc._awaiting_fill == {}
+    assert (await st.get_order(cid)).status == OrderStatus.REJECTED
+    await svc.stop()
+
+
+class EntryRaisesBroker(PaperBroker):
+    def __init__(self, *a, exc: Exception, **kw) -> None:
+        super().__init__(*a, **kw)
+        self._exc = exc
+
+    async def submit(self, req):
+        self.submitted.append(req)
+        raise self._exc
+
+
+async def test_entry_api_error_marks_order_rejected(bus, st, state, exchange_info):
+    for exc in (BinanceAPIError(400, -2019, "Margin is insufficient."), BinanceOrderNotFound("gone")):
+        broker = EntryRaisesBroker(state, bus, exchange_info, exc=exc)
+        svc = await _svc_with(broker, bus, st, state)
+        await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+        cid = broker.submitted[0].client_order_id
+        assert (await st.get_order(cid)).status == OrderStatus.REJECTED
+        assert svc._awaiting_fill == {}
+        await svc.stop()
+
+
+async def test_entry_unconfirmed_leaves_order_new(bus, st, state, exchange_info):
+    broker = EntryUnconfirmedBroker(state, bus, exchange_info)
+    svc = await _svc_with(broker, bus, st, state)
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(160)))
+    cid = broker.submitted[0].client_order_id
+    assert (await st.get_order(cid)).status == OrderStatus.NEW and cid in svc._awaiting_fill
+    await svc.stop()

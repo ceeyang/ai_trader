@@ -5,7 +5,7 @@ import pytest
 import respx
 from conftest import _append, fake_ws_factory, fx
 
-from ai_trader.exchange.binance.errors import BinanceConnectionError, FilterViolation
+from ai_trader.exchange.binance.errors import BinanceConnectionError, BinanceOrderNotFound, FilterViolation
 from ai_trader.exchange.binance.rest import BinanceFuturesRest
 from ai_trader.execution.binance import BinanceFuturesBroker
 from ai_trader.models import (
@@ -50,9 +50,17 @@ async def test_submit_timeout_and_not_found_raises(bus, exchange_info):
     post = respx.post(f"{BASE}/fapi/v1/order").mock(side_effect=httpx.ReadTimeout("t"))
     respx.get(f"{BASE}/fapi/v1/order").mock(return_value=httpx.Response(400, json={"code": -2013, "msg": "Order does not exist."}))
     br = _broker(bus, exchange_info)
-    with pytest.raises(BinanceConnectionError):
+    with pytest.raises(BinanceOrderNotFound):
         await br.submit(_req())
     assert post.call_count == 1
+
+
+@respx.mock
+async def test_submit_timeout_and_lookup_fails_is_unconfirmed(bus, exchange_info):
+    respx.post(f"{BASE}/fapi/v1/order").mock(side_effect=httpx.ReadTimeout("t"))
+    respx.get(f"{BASE}/fapi/v1/order").mock(return_value=httpx.Response(400, json={"code": -1021, "msg": "ts"}))
+    with pytest.raises(BinanceConnectionError):
+        await _broker(bus, exchange_info).submit(_req())
 
 
 @respx.mock

@@ -3,6 +3,8 @@
 * `submit` validates against the symbol filters before any HTTP call. POST /order is
   never retried; on a timeout / connection error the order is looked up by its
   `client_order_id` instead, so an order that did reach the exchange is never sent twice.
+  A lookup answering -2013 (does not exist) raises `BinanceOrderNotFound` (the order was
+  never placed); any other lookup failure raises `BinanceConnectionError` (unknown).
 * `start()` opens a listen key, seeds the position cache from `position_risk`, and runs
   the user-data stream plus keepalive (30 min) and reconcile (`reconcile_interval_s`)
   loops as background tasks.
@@ -21,7 +23,12 @@ from typing import Literal, Protocol
 import httpx
 
 from ai_trader.bus import EventBus
-from ai_trader.exchange.binance.errors import BinanceAPIError, BinanceConnectionError, BinanceError
+from ai_trader.exchange.binance.errors import (
+    BinanceAPIError,
+    BinanceConnectionError,
+    BinanceError,
+    BinanceOrderNotFound,
+)
 from ai_trader.exchange.binance.filters import ExchangeInfo
 from ai_trader.exchange.binance.parsers import parse_account_update, parse_order_trade_update
 from ai_trader.exchange.binance.rest import BinanceFuturesRest
@@ -41,6 +48,7 @@ from ai_trader.models import (
 log = logging.getLogger(__name__)
 
 KEEPALIVE_INTERVAL_S = 30 * 60
+_ORDER_DOES_NOT_EXIST = -2013
 
 
 class _WS(Protocol):
@@ -228,7 +236,15 @@ class BinanceFuturesBroker:
             )
             try:
                 return await self._rest.get_order(req.symbol, client_order_id=req.client_order_id)
-            except (BinanceAPIError, BinanceConnectionError, httpx.TimeoutException) as lookup_exc:
+            except BinanceAPIError as lookup_exc:
+                if lookup_exc.code == _ORDER_DOES_NOT_EXIST:
+                    raise BinanceOrderNotFound(
+                        f"order {req.client_order_id} does not exist after {type(exc).__name__}"
+                    ) from exc
+                raise BinanceConnectionError(
+                    f"order {req.client_order_id} not confirmed after {type(exc).__name__}: {lookup_exc}"
+                ) from exc
+            except (BinanceConnectionError, httpx.TimeoutException) as lookup_exc:
                 raise BinanceConnectionError(
                     f"order {req.client_order_id} not confirmed after {type(exc).__name__}: {lookup_exc}"
                 ) from exc
