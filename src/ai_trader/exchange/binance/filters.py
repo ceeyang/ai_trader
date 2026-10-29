@@ -1,7 +1,7 @@
 """Per-symbol exchange filters: rounding and order validation (design 5.4)."""
 
 from dataclasses import dataclass, field
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 from ai_trader.exchange.binance.errors import FilterViolation, UnknownSymbol
 from ai_trader.models import OrderRequest
@@ -50,6 +50,15 @@ class SymbolFilters:
                 f"{self.symbol}: notional {qty * price} below min_notional {self.min_notional}"
             )
         return qty
+
+    def min_qty_for_price(self, price: Decimal) -> Decimal:
+        """Smallest step-aligned quantity (≥ `min_qty`) whose notional at `price` is at
+        least `min_notional`: the exchange's minimum order size at this price."""
+        if price <= 0:
+            raise FilterViolation(f"{self.symbol}: price must be positive, got {price}")
+        units = (self.min_notional / price / self.step_size).to_integral_value(rounding=ROUND_CEILING)
+        qty = (units * self.step_size).quantize(self.step_size)
+        return max(qty, self.min_qty)
 
     def validate(self, req: OrderRequest) -> None:
         """Raise FilterViolation if quantity / prices are unaligned or below the minimums."""

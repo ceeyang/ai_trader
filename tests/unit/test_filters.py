@@ -21,3 +21,7 @@ def test_validate_allows_close_position_without_qty():
     req = OrderRequest(symbol="BTCUSDT", side=Side.SELL, type=OrderType.STOP_MARKET, stop_price=Decimal("79000.0"),
                        close_position=True, client_order_id="ait-y")
     F.validate(req)
+def test_min_qty_for_price():
+    assert F.min_qty_for_price(Decimal(80000)) == Decimal("0.002")  # 0.001 -> 80 < 100
+    assert F.min_qty_for_price(Decimal(100000)) == Decimal("0.001")  # exactly 100
+    assert F.min_qty_for_price(Decimal(1000000)) == Decimal("0.001")  # min_qty dominates

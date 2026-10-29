@@ -4,7 +4,9 @@ Every decision goes through `risk.evaluate` first; nothing reaches `broker.submi
 unless the verdict approves it.
 
 * OPEN: symbol setup -> quantity from the (possibly risk-adjusted) notional at the
-  current mark -> MARKET entry -> once filled, a `close_position` STOP_MARKET /
+  current mark (below the exchange minimum it is rounded up to the minimum quantity when
+  that notional is ≤ `risk.max_order_notional_usdt` and ≤ 1.25 × the notional, else the
+  decision is skipped) -> MARKET entry -> once filled, a `close_position` STOP_MARKET /
   TAKE_PROFIT_MARKET pair on the opposite side, priced off the entry's average price and
   rounded down to the tick. The pair is placed right away when `submit` returns FILLED
   (paper, or a live RESULT response), otherwise when the entry's FILLED `OrderResult`
@@ -33,6 +35,7 @@ import httpx
 from ai_trader.bus import EventBus
 from ai_trader.data.market_state import MarketState
 from ai_trader.exchange.binance.errors import BinanceAPIError, BinanceConnectionError, FilterViolation
+from ai_trader.exchange.binance.filters import SymbolFilters
 from ai_trader.execution.broker import Broker
 from ai_trader.execution.paper import PaperBrokerError
 from ai_trader.models import (
@@ -58,6 +61,8 @@ from ai_trader.storage.db import Store
 log = logging.getLogger(__name__)
 
 MAX_HOLD_CHECK_INTERVAL_S = 60
+# An OPEN below the exchange minimum is rounded up to it when that costs at most +25 %.
+MIN_NOTIONAL_ROUND_UP = Decimal("1.25")
 _PROTECTIVE_ROLES = {OrderRole.STOP_LOSS, OrderRole.TAKE_PROFIT}
 _UNKNOWN_ORDER = -2011  # Binance: cancel of an order that no longer exists
 # Transport failures after which the order may still exist (and fill) on the exchange.
@@ -155,8 +160,15 @@ class ExecutionService:
         try:
             qty = filters.qty_for_notional(notional, mp.mark_price)
         except FilterViolation as exc:
-            log.warning("FilterViolation for OPEN decision %s on %s: %s", d.id, symbol, exc)
-            return
+            rounded = self._round_up_to_minimum(filters, notional, mp.mark_price)
+            if rounded is None:
+                log.warning("FilterViolation for OPEN decision %s on %s: %s", d.id, symbol, exc)
+                return
+            qty = rounded
+            log.info(
+                "OPEN decision %s on %s: notional %s rounded up to exchange minimum qty %s (%s USDT)",
+                d.id, symbol, notional, qty, qty * mp.mark_price,
+            )
         req = OrderRequest(
             symbol=symbol,
             side=d.side,
@@ -186,6 +198,22 @@ class ExecutionService:
         elif res.status not in (OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED):
             self._awaiting_fill.pop(req.client_order_id, None)
             log.warning("entry order %s ended %s", req.client_order_id, res.status.value)
+
+    def _round_up_to_minimum(self, filters: SymbolFilters, notional: Decimal, price: Decimal) -> Decimal | None:
+        """The exchange-minimum quantity when `notional` fell short of the minimums only
+        slightly: its notional must stay within the risk cap and ≤ 1.25 × `notional`."""
+        try:
+            qty = filters.min_qty_for_price(price)
+        except FilterViolation:
+            return None
+        min_notional = qty * price
+        if min_notional <= notional:  # the violation was not about the minimums (e.g. max_qty)
+            return None
+        if min_notional > self._settings.risk.max_order_notional_usdt:
+            return None
+        if min_notional > notional * MIN_NOTIONAL_ROUND_UP:
+            return None
+        return qty
 
     async def _on_entry_filled(self, client_order_id: str, res: OrderResult) -> None:
         d = self._awaiting_fill.pop(client_order_id, None)

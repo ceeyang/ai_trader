@@ -362,3 +362,34 @@ async def test_max_hold_suppressed_while_kill_switch_active(bus, st, state, exch
     await bus.drain()
     assert [d.intent for d in decisions] == [Intent.CLOSE]
     await svc.stop()
+
+
+async def test_open_below_minimum_rounds_up_within_25_percent(bus, st, state, exchange_info, caplog):
+    paper, svc = await _setup(bus, st, state, exchange_info)
+    with caplog.at_level(logging.INFO):
+        await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(130)))
+    # 130 / 80000 floors to 0.001 (80 USDT < min 100); 0.002 = 160 USDT <= 130 x 1.25
+    assert paper.submitted[0].quantity == Decimal("0.002")
+    assert "rounded up to exchange minimum" in caplog.text
+    await svc.stop()
+
+
+async def test_open_below_minimum_skipped_when_round_up_too_large(bus, st, state, exchange_info):
+    paper, svc = await _setup(bus, st, state, exchange_info)
+    for notional in (100, 90):  # 0.001 x 80000 = 80 < 100; 0.002 = 160 > notional x 1.25
+        await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(notional)))
+    assert paper.submitted == []
+    await svc.stop()
+
+
+async def test_open_round_up_respects_max_order_notional(bus, st, state, exchange_info):
+    from ai_trader.settings import RiskLimits
+
+    state.update_mark(make_mark_price(mark=Decimal(80000)))
+    paper = PaperBroker(state, bus, exchange_info)
+    await bus.start()
+    await paper.start()
+    settings = Settings(_env_file=None, risk=RiskLimits(max_order_notional_usdt=Decimal(150)))
+    svc = ExecutionService(bus, paper, AlwaysApprove(), st, settings, state=state, clock=lambda: T0.timestamp())
+    await svc.handle_decision(make_decision(side=Side.BUY, notional=Decimal(130)))
+    assert paper.submitted == []  # 160 USDT would exceed the 150 cap
