@@ -17,6 +17,9 @@ $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
 if (-not $uv) { $uv = Join-Path $env:USERPROFILE ".local\bin\uv.exe" }
 if (-not (Test-Path $uv)) { $uv = "C:\Users\cee\.local\bin\uv.exe" }
 
+# Same symbol universe as scripts/paper_overnight.ps1 so the sparklines cover every traded symbol.
+$env:SYMBOLS = '["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","LINKUSDT","LTCUSDT","DOTUSDT","TRXUSDT","SUIUSDT","NEARUSDT"]'
+
 $log = Join-Path $Repo "data\dashboard.log"
 $err = Join-Path $Repo "data\dashboard.err.log"
 "uv=$uv user=$env:USERNAME"
