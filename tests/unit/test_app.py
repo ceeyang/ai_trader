@@ -22,7 +22,7 @@ async def test_create_components_paper_mode_wires_without_network(tmp_path, exch
     s = Settings(_env_file=None, mode="paper", db_path=tmp_path / "a.db", llm=LLMConfig(enabled=False))
     c = await create_components(s, rest=FakeRest(exchange_info), ws_factory=fake_ws_factory,
                           http=httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
-    assert isinstance(c.broker, PaperBroker) and len(c.detectors) == 3 and c.risk is not None
+    assert isinstance(c.broker, PaperBroker) and len(c.detectors) == 5 and c.risk is not None
     await c.http.aclose()
 
 

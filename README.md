@@ -101,8 +101,8 @@ uv run ai-trader run --mode live    # 真实下单（测试网，除非显式切
 |---|---|---|
 | 顶层 | `BINANCE_*`、`SYMBOLS`、`LEVERAGE`、`MARGIN_TYPE`、`MODE`、`DB_PATH`、`LOG_*` | 交易所端点与模式、交易标的、杠杆、存储与日志 |
 | `RISK__*` | 风控硬限制 | 最大杠杆/单笔名义/总敞口/持仓数/日亏损率/连续亏损次数/行情新鲜度；**AutoTuner 永不修改这组参数** |
-| `STRATEGY__*` | 信号聚合与下单 | 开/平仓阈值、基础下单名义、冷却时间、止损/止盈比例、最大持有时间、信号半衰期、各探测器权重（默认 `funding_extreme=0.5`、`liquidation_burst=0.7`、`news_sentiment=1.0`（DeepSeek 判断的新闻）、`news_keyword=0.5`（关键词分类器 / DeepSeek 失败兜底判断的新闻，证据较弱，单独计权、单独自动调参）） |
-| `DETECTORS__*` | 探测器阈值 | 资金费率年化阈值、清算窗口与阈值、新闻置信度阈值 |
+| `STRATEGY__*` | 信号聚合与下单 | 开/平仓阈值、基础下单名义、冷却时间、止损/止盈比例、最大持有时间、信号半衰期、各探测器权重（默认 `funding_extreme=0.5`、`liquidation_burst=0.7`、`news_sentiment=1.0`（DeepSeek 判断的新闻）、`news_keyword=0.5`（关键词分类器 / DeepSeek 失败兜底判断的新闻，证据较弱，单独计权、单独自动调参）、`breakout=0.8`、`mean_reversion=0.6`） |
+| `DETECTORS__*` | 探测器阈值 | 资金费率年化阈值、清算窗口与阈值、新闻置信度阈值；K 线突破（`BREAKOUT_LOOKBACK=60`、`BREAKOUT_VOLUME_MULT=1.5`、`BREAKOUT_MIN_MOVE_PCT=0.15`、`BREAKOUT_TTL_S=1800`、`BREAKOUT_COOLDOWN_S=900`）与均值回归（`MR_LOOKBACK=30`、`MR_Z_ENTRY=2.5`、`MR_TTL_S=1200`、`MR_COOLDOWN_S=900`）参数 |
 | `NEWS__*` | 新闻来源 | RSS 源列表与轮询间隔、X 查询与每日读取预算、`NEWS__MAX_NEWS_AGE_S`（默认 7200 s：发布时间早于此的新闻只入库、不分类（不花 DeepSeek 预算）、不产生信号；健康日志里的 `stale_news_skipped` 是计数） |
 | `LLM__*` | 情绪分类器 | 是否启用 DeepSeek、模型、每日调用预算、超时 |
 

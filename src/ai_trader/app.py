@@ -28,8 +28,10 @@ from urllib.parse import urlparse
 import httpx
 
 from ai_trader.analysis.detectors.base import Detector, DetectorRunner
+from ai_trader.analysis.detectors.breakout import BreakoutDetector
 from ai_trader.analysis.detectors.funding_extreme import FundingExtremeDetector
 from ai_trader.analysis.detectors.liquidation_burst import LiquidationBurstDetector
+from ai_trader.analysis.detectors.mean_reversion import MeanReversionDetector
 from ai_trader.analysis.detectors.news_sentiment import NewsSentimentDetector
 from ai_trader.analysis.forward_returns import ForwardReturnTracker
 from ai_trader.analysis.sentiment.deepseek import DeepSeekClassifier
@@ -176,6 +178,8 @@ async def _wire(settings: Settings, rest, http: httpx.AsyncClient, ws_factory, s
     detectors: list[Detector] = [
         FundingExtremeDetector(settings.detectors, state),
         LiquidationBurstDetector(settings.detectors, state),
+        BreakoutDetector(settings.detectors, state),
+        MeanReversionDetector(settings.detectors, state),
         NewsSentimentDetector(
             classifier, settings.symbols, store, state, settings.detectors, news_cfg=settings.news
         ),

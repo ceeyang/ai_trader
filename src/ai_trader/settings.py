@@ -42,6 +42,8 @@ class StrategyConfig(BaseModel):
         # news signals whose sentiment came from the keyword classifier (no LLM, or the
         # LLM failed): weaker evidence, separately weighted and auto-tuned.
         "news_keyword": 0.5,
+        "breakout": 0.8,
+        "mean_reversion": 0.6,
     }
 
 
@@ -51,6 +53,17 @@ class DetectorConfig(BaseModel):
     liquidation_notional_threshold_usdt: Decimal = Decimal(50000)
     liquidation_cooldown_s: int = 900
     news_min_confidence: float = 0.6
+    # breakout (closed 1m klines)
+    breakout_lookback: int = 60
+    breakout_volume_mult: float = 1.5
+    breakout_min_move_pct: float = 0.15
+    breakout_ttl_s: int = 1800
+    breakout_cooldown_s: int = 900
+    # mean reversion (z-score of closed 1m kline closes)
+    mr_lookback: int = 30
+    mr_z_entry: float = 2.5
+    mr_ttl_s: int = 1200
+    mr_cooldown_s: int = 900
 
 
 class NewsConfig(BaseModel):
